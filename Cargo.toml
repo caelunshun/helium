@@ -1,0 +1,32 @@
+[package]
+name = "helium"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ahash = "0.8"
+bytemuck = { version = "1", features = ["derive", "min_const_generics", "nightly_stdsimd", "nightly_portable_simd"] }
+half = { version = "2", features = ["use-intrinsics", "bytemuck"] }
+slotmap = "1"
+gemm = { version = "0.18", optional = true, features = ["nightly"] }
+sleef = { version = "0.3", optional = true }
+rayon = { version = "1", optional = true }
+thiserror = "1"
+
+[dependencies.cudarc]
+version = "0.11"
+optional = true
+default-features = false
+features = [
+    "cuda-version-from-build-system",
+    "driver",
+    "cublaslt",
+    "curand",
+    "cudnn",
+    "nvrtc",
+]
+
+[features]
+default = ["cpu", "cuda"]
+cuda = ["dep:cudarc"]
+cpu = ["dep:gemm", "dep:sleef", "dep:rayon"]
