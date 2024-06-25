@@ -11,6 +11,7 @@ slotmap = "1"
 gemm = { version = "0.18", optional = true, features = ["nightly"] }
 sleef = { version = "0.3", optional = true }
 rayon = { version = "1", optional = true }
+indoc = { version = "2", optional = true }
 thiserror = "1"
 
 [dependencies.cudarc]
@@ -26,7 +27,10 @@ features = [
     "nvrtc",
 ]
 
+[dev-dependencies]
+insta = "1"
+
 [features]
 default = ["cpu", "cuda"]
-cuda = ["dep:cudarc"]
+cuda = ["dep:cudarc", "dep:indoc"]
 cpu = ["dep:gemm", "dep:sleef", "dep:rayon"]

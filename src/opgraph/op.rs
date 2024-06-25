@@ -1,6 +1,6 @@
 use crate::{
     data_type::DataType,
-    opgraph::{Descriptor, NodeId},
+    opgraph::{Descriptor, NodeId, VarId},
 };
 
 #[derive(Debug, Clone)]
@@ -10,6 +10,7 @@ pub enum Op {
     UnaryPointwise(UnaryPointwise),
     BinaryPointwise(BinaryPointwise),
     ChangeDataType(ChangeDataType),
+    Reduce(Reduce),
 }
 
 impl Op {
@@ -20,17 +21,38 @@ impl Op {
             Op::UnaryPointwise(op) => vec![op.input],
             Op::BinaryPointwise(op) => vec![op.lhs, op.rhs],
             Op::ChangeDataType(op) => vec![op.input],
+            Op::Reduce(op) => vec![op.input],
+        }
+    }
+
+    pub fn referenced_vars(&self) -> Vec<VarId> {
+        match self {
+            Op::UnaryPointwise(UnaryPointwise {
+                op:
+                    UnaryPointwiseOp::AddScalar(var)
+                    | UnaryPointwiseOp::MulScalar(var)
+                    | UnaryPointwiseOp::PowScalar(var),
+                ..
+            }) => vec![*var],
+            _ => vec![],
         }
     }
 
     pub fn output_descriptor(&self, input_descriptors: &[Descriptor]) -> Descriptor {
-        input_descriptors[0]
+        match self {
+            Op::ChangeDataType(ChangeDataType { target_type, .. }) => Descriptor {
+                dimension: input_descriptors[0].dimension,
+                data_type: *target_type,
+            },
+            _ => input_descriptors[0],
+        }
     }
 
     pub fn kind(&self) -> OpKind {
         match self {
             Op::Matmul(_) => OpKind::Matmul,
             Op::Transpose(_) => OpKind::Tranpose,
+            Op::Reduce(_) => OpKind::Reduce,
             Op::UnaryPointwise(_) => OpKind::UnaryPointwise,
             Op::BinaryPointwise(_) => OpKind::BinaryPointwise,
             Op::ChangeDataType(_) => OpKind::ChangeDataType,
@@ -42,6 +64,7 @@ impl Op {
 pub enum OpKind {
     Matmul,
     Tranpose,
+    Reduce,
     UnaryPointwise,
     BinaryPointwise,
     ChangeDataType,
@@ -71,9 +94,9 @@ pub struct UnaryPointwise {
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum UnaryPointwiseOp {
-    AddScalar(f64),
-    MulScalar(f64),
-    PowScalar(f64),
+    AddScalar(VarId),
+    MulScalar(VarId),
+    PowScalar(VarId),
     Neg,
     Exp,
     Sin,
@@ -106,4 +129,26 @@ pub enum BinaryPointwiseOp {
 pub struct ChangeDataType {
     pub input: NodeId,
     pub target_type: DataType,
+}
+
+/// Reduction of tensor along dimension(s).
+#[derive(Debug, Clone)]
+pub struct Reduce {
+    pub input: NodeId,
+    /// How many dimensions to reduce on.
+    /// The last `depth` dimensions are replaced
+    /// with a single dimension that will contain
+    /// the reduced values.
+    pub depth: u32,
+    pub op: ReduceOp,
+}
+
+/// Type of reduction.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ReduceOp {
+    Sum,
+    Product,
+    Mean,
+    Max,
+    Min,
 }
