@@ -9,6 +9,28 @@ use std::cell::Cell;
 
 mod pointwise;
 
+#[derive(Debug, Clone)]
+pub struct Kernel {
+    /// CUDA C++ code
+    pub code: String,
+    /// List of inputs to pass to kernel.
+    pub params: Vec<KernelParam>,
+}
+
+#[derive(Debug, Clone)]
+pub enum KernelParam {
+    /// Tensor data pointer from a previous node's output
+    Node(NodeId),
+    /// Scalar float variable
+    Var(VarId),
+    /// Output tensor
+    Output,
+    /// Number of elements to operate on; used for pointwise
+    /// and reduction (for reductions: also indicates the stride
+    /// of reduction groups)
+    Size,
+}
+
 /// Context for building kernel source code.
 #[derive(Default)]
 struct Context {

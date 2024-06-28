@@ -6,7 +6,7 @@
 //! All input tensors and the output tensor have the same length.
 
 use crate::{
-    cuda::kernel::{cpp_type_name, Context},
+    cuda::kernel::{cpp_type_name, Context, Kernel, KernelParam},
     opgraph::{
         op::{BinaryPointwiseOp, Op, UnaryPointwiseOp},
         subgraph::OpSubgraph,
@@ -51,17 +51,19 @@ fn generate_for_binary(op: BinaryPointwiseOp, lhs: &str, rhs: &str) -> String {
 
 /// Generates a CUDA C++ kernel that applies a sequence of pointwise
 /// operations to its inputs as defined by the given `OpSubgraph`.
-pub fn generate_kernel(subgraph: &OpSubgraph) -> String {
+pub fn generate_kernel(subgraph: &OpSubgraph) -> Kernel {
     let mut cx = Context::new();
 
-    let mut parameters = String::new();
+    let mut params = Vec::new();
+    let mut params_code = String::new();
     let mut statements = String::new();
 
     for input in subgraph.inputs() {
         let input_ident = cx.insert_input(input);
         let typ = subgraph.graph().get(input).descriptor().data_type;
         let typ = cpp_type_name(typ);
-        parameters.push_str(&format!("{typ} *{input_ident}, "));
+        params.push(KernelParam::Node(input));
+        params_code.push_str(&format!("{typ} *{input_ident}, "));
 
         // Load from memory
         let intermediate_ident = cx.insert_intermediate(input);
@@ -72,30 +74,35 @@ pub fn generate_kernel(subgraph: &OpSubgraph) -> String {
 
     for var in subgraph.referenced_vars() {
         let var_ident = cx.insert_var(var);
-        parameters.push_str(&format!("float {var_ident}, "));
+        params.push(KernelParam::Var(var));
+        params_code.push_str(&format!("float {var_ident}, "));
     }
 
     // Output tensor
     let output_type = subgraph.graph().get(subgraph.leaf()).descriptor().data_type;
     let output_type = cpp_type_name(output_type);
-    parameters.push_str(&format!("{output_type} *out"));
+    params.push(KernelParam::Output);
+    params_code.push_str(&format!("{output_type} *out"));
+
+    params.push(KernelParam::Size);
 
     statements.push_str(&generate_pointwise_statements(subgraph, &mut cx));
 
     let out_ident = cx.intermediate(subgraph.leaf());
 
-    formatdoc! {"
+    let code = formatdoc! {"
         #include <math.h>
         #include <cuda_fp16.h>
         #include <cuda_bf16.h>
 
-        __global__ void generatedPointwiseKernel({parameters}, size_t size) {{
+        __global__ void generatedPointwiseKernel({params_code}, size_t size) {{
             size_t index = threadIdx.x + blockIdx.x * blockDim.x;
             if (index >= size) return;
             {statements}
             out[index] = static_cast<{output_type}>({out_ident});
         }}
-    "}
+    "};
+    Kernel { code, params }
 }
 
 /// Generates a list of CUDA C++ statements to evaluate the given subgraph of
@@ -224,6 +231,6 @@ mod tests {
         let subgraph = OpSubgraph::from_nodes(&graph, vec![c, d, e, out, out_casted]);
 
         let kernel = generate_kernel(&subgraph);
-        insta::assert_snapshot!(kernel);
+        insta::assert_debug_snapshot!(kernel);
     }
 }
