@@ -1,0 +1,24 @@
+---
+source: src/cuda/kernel/reduction.rs
+expression: kernel.params
+---
+[
+    Node(
+        NodeId(
+            1v1,
+        ),
+    ),
+    Node(
+        NodeId(
+            2v1,
+        ),
+    ),
+    Var(
+        VarId(
+            0,
+        ),
+    ),
+    Output,
+    ReductionStride,
+    Size,
+]

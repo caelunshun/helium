@@ -1,0 +1,55 @@
+---
+source: src/cuda/kernel/reduction.rs
+expression: kernel.code
+---
+#include <math.h>
+#include <cuda_fp16.h>
+#include <cuda_bf16.h>
+#include <limits>
+
+__global__ void generatedReductionKernel(half *ident0, nv_bfloat16 *ident2, float ident4,  float *out, uint32_t stride, uint32_t totalSize) {
+    extern __shared__ float localReduction[];
+
+    uint32_t totalIndex = threadIdx.x + blockDim.x * blockIdx.x;
+    uint32_t strideRoundedUp = (stride + blockDim.x - 1) / blockDim.x * blockDim.x;
+
+    uint32_t group = totalIndex / strideRoundedUp;
+    uint32_t indexInGroup = totalIndex % strideRoundedUp;
+    
+    float val = 0.0;
+    if (indexInGroup < stride) {
+        uint32_t index = indexInGroup;
+        float ident1 = ident0[index];
+float ident3 = ident2[index];
+float ident5 = ident1 * ident4;
+float ident6 = ident5 + ident3;
+float scaledVal = ident6 / stride;
+
+        val = scaledVal;
+    }
+
+    // Block-level reduction
+    for (int offset = blockDim.x / 2; offset >= 32; offset /= 2) {
+        localReduction[threadIdx.x] = val;
+        __syncthreads();
+        if (threadIdx.x < offset) {
+            int target = threadIdx.x + offset;
+            val = val + localReduction[target];
+        }
+    }
+
+    // Warp-level reduction
+    __syncthreads();
+    if (threadIdx.x < 32) {
+        uint32_t mask = 0xFFFFFFFF;
+        for (int offset = 16; offset > 0; offset /= 2) {
+            float otherWarpVal = __shfl_down_sync(mask, val, offset);
+            val = val + otherWarpVal;
+        }
+
+        // Grid-level reduction
+        if (threadIdx.x == 0) {
+            atomicAdd(out + group, val);
+        }
+    }
+}

@@ -16,6 +16,8 @@ use crate::{
 use indoc::formatdoc;
 use slotmap::SecondaryMap;
 
+pub const KERNEL_NAME: &str = "generatedPointwiseKernel";
+
 fn generate_for_unary(op: UnaryPointwiseOp, input: &str, cx: &Context) -> String {
     match op {
         UnaryPointwiseOp::AddScalar(x) => {
@@ -49,15 +51,13 @@ fn generate_for_binary(op: BinaryPointwiseOp, lhs: &str, rhs: &str) -> String {
     }
 }
 
-/// Generates a CUDA C++ kernel that applies a sequence of pointwise
-/// operations to its inputs as defined by the given `OpSubgraph`.
-pub fn generate_kernel(subgraph: &OpSubgraph) -> Kernel {
-    let mut cx = Context::new();
-
-    let mut params = Vec::new();
-    let mut params_code = String::new();
-    let mut statements = String::new();
-
+pub fn load_inputs(
+    params: &mut Vec<KernelParam>,
+    params_code: &mut String,
+    subgraph: &OpSubgraph,
+    statements: &mut String,
+    cx: &mut Context,
+) {
     for input in subgraph.inputs() {
         let input_ident = cx.insert_input(input);
         let typ = subgraph.graph().get(input).descriptor().data_type;
@@ -77,6 +77,24 @@ pub fn generate_kernel(subgraph: &OpSubgraph) -> Kernel {
         params.push(KernelParam::Var(var));
         params_code.push_str(&format!("float {var_ident}, "));
     }
+}
+
+/// Generates a CUDA C++ kernel that applies a sequence of pointwise
+/// operations to its inputs as defined by the given `OpSubgraph`.
+pub fn generate_kernel(subgraph: &OpSubgraph) -> Kernel {
+    let mut cx = Context::new();
+
+    let mut params = Vec::new();
+    let mut params_code = String::new();
+    let mut statements = String::new();
+
+    load_inputs(
+        &mut params,
+        &mut params_code,
+        subgraph,
+        &mut statements,
+        &mut cx,
+    );
 
     // Output tensor
     let output_type = subgraph.graph().get(subgraph.leaf()).descriptor().data_type;
@@ -95,8 +113,8 @@ pub fn generate_kernel(subgraph: &OpSubgraph) -> Kernel {
         #include <cuda_fp16.h>
         #include <cuda_bf16.h>
 
-        __global__ void generatedPointwiseKernel({params_code}, size_t size) {{
-            size_t index = threadIdx.x + blockIdx.x * blockDim.x;
+        __global__ void {KERNEL_NAME}({params_code}, uint32_t size) {{
+            uint32_t index = threadIdx.x + blockIdx.x * blockDim.x;
             if (index >= size) return;
             {statements}
             out[index] = static_cast<{output_type}>({out_ident});
@@ -231,6 +249,7 @@ mod tests {
         let subgraph = OpSubgraph::from_nodes(&graph, vec![c, d, e, out, out_casted]);
 
         let kernel = generate_kernel(&subgraph);
-        insta::assert_debug_snapshot!(kernel);
+        insta::assert_snapshot!(kernel.code);
+        insta::assert_debug_snapshot!(kernel.params);
     }
 }

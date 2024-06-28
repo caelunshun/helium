@@ -1,26 +1,21 @@
 ---
 source: src/cuda/kernel/pointwise.rs
-expression: kernel
+expression: kernel.code
 ---
-Kernel {
-    code: "#include <math.h>\n#include <cuda_fp16.h>\n#include <cuda_bf16.h>\n\n__global__ void generatedPointwiseKernel(nv_bfloat16 *ident0, float *ident2, float ident4, half *out, size_t size) {\n    size_t index = threadIdx.x + blockIdx.x * blockDim.x;\n    if (index >= size) return;\n    float ident1 = ident0[index];\nfloat ident3 = ident2[index];\nfloat ident5 = fmaxf(0, ident1);\nfloat ident6 = powf(ident5, ident4);\nfloat ident7 = powf(ident1, ident3);\nfloat ident8 = ident7 * ident6;\nfloat ident9 = ident8;\n\n    out[index] = static_cast<half>(ident9);\n}\n",
-    params: [
-        Node(
-            NodeId(
-                1v1,
-            ),
-        ),
-        Node(
-            NodeId(
-                2v1,
-            ),
-        ),
-        Var(
-            VarId(
-                0,
-            ),
-        ),
-        Output,
-        Size,
-    ],
+#include <math.h>
+#include <cuda_fp16.h>
+#include <cuda_bf16.h>
+
+__global__ void generatedPointwiseKernel(nv_bfloat16 *ident0, float *ident2, float ident4, half *out, uint32_t size) {
+    uint32_t index = threadIdx.x + blockIdx.x * blockDim.x;
+    if (index >= size) return;
+    float ident1 = ident0[index];
+float ident3 = ident2[index];
+float ident5 = fmaxf(0, ident1);
+float ident6 = powf(ident5, ident4);
+float ident7 = powf(ident1, ident3);
+float ident8 = ident7 * ident6;
+float ident9 = ident8;
+
+    out[index] = static_cast<half>(ident9);
 }

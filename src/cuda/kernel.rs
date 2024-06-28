@@ -7,7 +7,8 @@ use crate::{
 use ahash::AHashMap;
 use std::cell::Cell;
 
-mod pointwise;
+pub mod pointwise;
+pub mod reduction;
 
 #[derive(Debug, Clone)]
 pub struct Kernel {
@@ -26,9 +27,11 @@ pub enum KernelParam {
     /// Output tensor
     Output,
     /// Number of elements to operate on; used for pointwise
-    /// and reduction (for reductions: also indicates the stride
-    /// of reduction groups)
+    /// and reduction
     Size,
+    /// For reductions, specifies the stride between reduction
+    /// groups
+    ReductionStride,
 }
 
 /// Context for building kernel source code.
