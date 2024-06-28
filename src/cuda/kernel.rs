@@ -29,7 +29,13 @@ pub struct CompiledKernel {
 
 impl CompiledKernel {
     pub fn new(kernel: &Kernel) -> Result<Self, CudaError> {
-        let ptx = compile_ptx_with_opts(&kernel.code, CompileOptions::default())?;
+        let ptx = compile_ptx_with_opts(
+            &kernel.code,
+            CompileOptions {
+                include_paths: vec!["/usr/local/cuda/include".into()], // TODO make cross-platform
+                ..Default::default()
+            },
+        )?;
         Ok(Self {
             ptx,
             entrypoint_name: kernel.entrypoint_name.clone(),

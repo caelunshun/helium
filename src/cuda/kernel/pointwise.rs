@@ -109,9 +109,10 @@ pub fn generate_kernel(subgraph: &OpSubgraph) -> Kernel {
     let out_ident = cx.intermediate(subgraph.leaf());
 
     let code = formatdoc! {"
-        #include <math.h>
         #include <cuda_fp16.h>
         #include <cuda_bf16.h>
+
+        typedef unsigned int uint32_t;
 
         __global__ void {KERNEL_NAME}({params_code}, uint32_t size) {{
             uint32_t index = threadIdx.x + blockIdx.x * blockDim.x;
@@ -201,6 +202,7 @@ pub fn generate_pointwise_statements(subgraph: &OpSubgraph, cx: &mut Context) ->
 mod tests {
     use super::*;
     use crate::{
+        cuda::kernel::CompiledKernel,
         data_type::DataType,
         opgraph::{
             op::{BinaryPointwise, ChangeDataType, UnaryPointwise},
@@ -255,5 +257,7 @@ mod tests {
         let kernel = generate_kernel(&subgraph);
         insta::assert_snapshot!(kernel.code);
         insta::assert_debug_snapshot!(kernel.params);
+
+        CompiledKernel::new(&kernel).unwrap();
     }
 }

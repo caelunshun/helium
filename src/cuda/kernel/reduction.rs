@@ -41,8 +41,8 @@ fn atomic_reduce_operation(reduction: ReduceOp, addr: &str, val: &str) -> String
 fn init_val(reduction: ReduceOp) -> &'static str {
     match reduction {
         ReduceOp::Sum | ReduceOp::Mean => "0.0",
-        ReduceOp::Max => "-std::numeric_limits<float>::infinity()",
-        ReduceOp::Min => "std::numeric_limits<float>::infinity()",
+        ReduceOp::Max => "-CUDART_INF_F",
+        ReduceOp::Min => "CUDART_INF_F",
     }
 }
 
@@ -96,10 +96,11 @@ pub fn generate_kernel(subgraph: &OpSubgraph) -> Kernel {
     let reduce_warp_level = reduce_operation(reduce.op, "val", "otherWarpVal");
 
     let code = formatdoc! {"
-        #include <math.h>
         #include <cuda_fp16.h>
         #include <cuda_bf16.h>
-        #include <limits>
+        #include <cuda_runtime.h>
+
+        typedef unsigned int uint32_t;
 
         __global__ void {KERNEL_NAME}({params_code} float *out, uint32_t stride, uint32_t totalSize) {{
             extern __shared__ float localReduction[];
@@ -155,6 +156,7 @@ pub fn generate_kernel(subgraph: &OpSubgraph) -> Kernel {
 mod tests {
     use super::*;
     use crate::{
+        cuda::kernel::CompiledKernel,
         data_type::DataType,
         opgraph::{
             op::{
@@ -203,5 +205,7 @@ mod tests {
         let kernel = generate_kernel(&subgraph);
         insta::assert_snapshot!(kernel.code);
         insta::assert_debug_snapshot!(kernel.params);
+
+        CompiledKernel::new(&kernel).unwrap();
     }
 }

@@ -2,9 +2,10 @@
 source: src/cuda/kernel/pointwise.rs
 expression: kernel.code
 ---
-#include <math.h>
 #include <cuda_fp16.h>
 #include <cuda_bf16.h>
+
+typedef unsigned int uint32_t;
 
 __global__ void generatedPointwiseKernel(nv_bfloat16 *ident0, float *ident2, float ident4, half *out, uint32_t size) {
     uint32_t index = threadIdx.x + blockIdx.x * blockDim.x;
