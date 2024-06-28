@@ -7,7 +7,7 @@ expression: kernel
 #include <cuda_bf16.h>
 
 __global__ void generatedPointwiseKernel(nv_bfloat16 *ident0, float *ident2, float ident4, half *out, size_t size) {
-    int index = threadIdx.x + blockIdx.x * blockDim.x;
+    size_t index = threadIdx.x + blockIdx.x * blockDim.x;
     if (index >= size) return;
     float ident1 = ident0[index];
 float ident3 = ident2[index];

@@ -57,7 +57,7 @@ pub fn generate_kernel(subgraph: &OpSubgraph) -> String {
     let mut parameters = String::new();
     let mut statements = String::new();
 
-    for input in subgraph.roots() {
+    for input in subgraph.inputs() {
         let input_ident = cx.insert_input(input);
         let typ = subgraph.graph().get(input).descriptor().data_type;
         let typ = cpp_type_name(typ);
@@ -90,7 +90,7 @@ pub fn generate_kernel(subgraph: &OpSubgraph) -> String {
         #include <cuda_bf16.h>
 
         __global__ void generatedPointwiseKernel({parameters}, size_t size) {{
-            int index = threadIdx.x + blockIdx.x * blockDim.x;
+            size_t index = threadIdx.x + blockIdx.x * blockDim.x;
             if (index >= size) return;
             {statements}
             out[index] = static_cast<{output_type}>({out_ident});
@@ -221,7 +221,7 @@ mod tests {
 
         graph.new_output(out_casted);
 
-        let subgraph = OpSubgraph::from_nodes(&graph, vec![a, b, c, d, e, out, out_casted]);
+        let subgraph = OpSubgraph::from_nodes(&graph, vec![c, d, e, out, out_casted]);
 
         let kernel = generate_kernel(&subgraph);
         insta::assert_snapshot!(kernel);

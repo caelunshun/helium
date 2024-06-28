@@ -147,7 +147,6 @@ pub struct Reduce {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ReduceOp {
     Sum,
-    Product,
     Mean,
     Max,
     Min,

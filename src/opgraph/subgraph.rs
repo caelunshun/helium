@@ -6,6 +6,7 @@ use crate::opgraph::{Intermediate, Node, NodeId, OpGraph, VarId};
 pub struct OpSubgraph<'a> {
     graph: &'a OpGraph,
     nodes: Vec<NodeId>,
+    inputs: Vec<NodeId>,
 }
 
 impl<'a> OpSubgraph<'a> {
@@ -28,7 +29,19 @@ impl<'a> OpSubgraph<'a> {
             1,
             "number of leaf nodes must be exactly 1"
         );
-        Self { nodes, graph }
+        let mut inputs = Vec::new();
+        for node in &nodes {
+            for input in graph.inbound_edges(*node) {
+                if !nodes.contains(input) && !inputs.contains(input) {
+                    inputs.push(*input);
+                }
+            }
+        }
+        Self {
+            nodes,
+            graph,
+            inputs,
+        }
     }
 
     pub fn nodes(&self) -> impl Iterator<Item = NodeId> + '_ {
@@ -43,13 +56,8 @@ impl<'a> OpSubgraph<'a> {
         self.nodes.contains(&id)
     }
 
-    pub fn roots(&self) -> impl Iterator<Item = NodeId> + '_ {
-        self.nodes.iter().copied().filter(|&id| {
-            self.graph
-                .inbound_edges(id)
-                .iter()
-                .all(|input| !self.nodes.contains(input))
-        })
+    pub fn inputs(&self) -> impl Iterator<Item = NodeId> + '_ {
+        self.inputs.iter().copied()
     }
 
     pub fn leaf(&self) -> NodeId {
