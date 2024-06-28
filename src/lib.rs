@@ -5,5 +5,6 @@ pub mod cpu;
 #[cfg(feature = "cuda")]
 pub mod cuda;
 pub mod data_type;
+pub mod error;
 pub mod opgraph;
 pub mod tensor;

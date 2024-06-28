@@ -120,7 +120,11 @@ pub fn generate_kernel(subgraph: &OpSubgraph) -> Kernel {
             out[index] = static_cast<{output_type}>({out_ident});
         }}
     "};
-    Kernel { code, params }
+    Kernel {
+        code,
+        params,
+        entrypoint_name: KERNEL_NAME.to_owned(),
+    }
 }
 
 /// Generates a list of CUDA C++ statements to evaluate the given subgraph of

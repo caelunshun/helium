@@ -1,10 +1,12 @@
 //! Runtime generation of fused kernels.
 
 use crate::{
+    cuda::error::CudaError,
     data_type::DataType,
     opgraph::{NodeId, VarId},
 };
 use ahash::AHashMap;
+use cudarc::nvrtc::{compile_ptx_with_opts, CompileOptions, Ptx};
 use std::cell::Cell;
 
 pub mod pointwise;
@@ -13,12 +15,42 @@ pub mod reduction;
 #[derive(Debug, Clone)]
 pub struct Kernel {
     /// CUDA C++ code
-    pub code: String,
+    code: String,
     /// List of inputs to pass to kernel.
-    pub params: Vec<KernelParam>,
+    params: Vec<KernelParam>,
+    entrypoint_name: String,
 }
 
-#[derive(Debug, Clone)]
+pub struct CompiledKernel {
+    ptx: Ptx,
+    entrypoint_name: String,
+    params: Vec<KernelParam>,
+}
+
+impl CompiledKernel {
+    pub fn new(kernel: &Kernel) -> Result<Self, CudaError> {
+        let ptx = compile_ptx_with_opts(&kernel.code, CompileOptions::default())?;
+        Ok(Self {
+            ptx,
+            entrypoint_name: kernel.entrypoint_name.clone(),
+            params: kernel.params.clone(),
+        })
+    }
+
+    pub fn ptx(&self) -> &Ptx {
+        &self.ptx
+    }
+
+    pub fn entrypoint_name(&self) -> &str {
+        &self.entrypoint_name
+    }
+
+    pub fn params(&self) -> impl Iterator<Item = KernelParam> + '_ {
+        self.params.iter().copied()
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
 pub enum KernelParam {
     /// Tensor data pointer from a previous node's output
     Node(NodeId),

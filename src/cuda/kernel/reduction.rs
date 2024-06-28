@@ -144,7 +144,11 @@ pub fn generate_kernel(subgraph: &OpSubgraph) -> Kernel {
         }}
     "};
 
-    Kernel { params, code }
+    Kernel {
+        params,
+        code,
+        entrypoint_name: KERNEL_NAME.to_owned(),
+    }
 }
 
 #[cfg(test)]
