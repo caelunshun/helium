@@ -3,7 +3,7 @@ use crate::{
     opgraph::{Descriptor, NodeId, VarId},
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Op {
     Matmul(Matmul),
     Transpose(Transpose),
@@ -72,7 +72,7 @@ pub enum OpKind {
 
 /// Batched multiplication of column-major matrices stored in the last
 /// two dimensions of the input tensors `A` and `B`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Matmul {
     pub input_a: NodeId,
     pub input_b: NodeId,
@@ -80,19 +80,19 @@ pub struct Matmul {
 
 /// Batched transpose of matrices stored in the
 /// last two dimensions of the input tensor.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Transpose {
     pub input: NodeId,
 }
 
 /// Pointwise operator with one input.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct UnaryPointwise {
     pub input: NodeId,
     pub op: UnaryPointwiseOp,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum UnaryPointwiseOp {
     AddScalar(VarId),
     MulScalar(VarId),
@@ -109,14 +109,14 @@ pub enum UnaryPointwiseOp {
 
 /// Pointwise operator with two inputs.
 /// Both inputs must have matching numbers of elements.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BinaryPointwise {
     pub lhs: NodeId,
     pub rhs: NodeId,
     pub op: BinaryPointwiseOp,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum BinaryPointwiseOp {
     Add,
     Mul,
@@ -125,14 +125,14 @@ pub enum BinaryPointwiseOp {
 }
 
 /// Cast tensor to a new precision.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ChangeDataType {
     pub input: NodeId,
     pub target_type: DataType,
 }
 
 /// Reduction of tensor along dimension(s).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Reduce {
     pub input: NodeId,
     /// How many dimensions to reduce on.

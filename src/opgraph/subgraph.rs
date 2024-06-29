@@ -1,22 +1,26 @@
 use crate::opgraph::{Intermediate, Node, NodeId, OpGraph, VarId};
+use std::{
+    hash::{Hash, Hasher},
+    sync::Arc,
+};
 
 /// Subset of an `OpGraph` with the guarantee
 /// that exactly one node (the leaf node) has an outgoing edge to a node
 /// not in this subset.
-pub struct OpSubgraph<'a> {
-    graph: &'a OpGraph,
+pub struct OpSubgraph {
+    graph: Arc<OpGraph>,
     nodes: Vec<NodeId>,
     inputs: Vec<NodeId>,
 }
 
-impl<'a> OpSubgraph<'a> {
+impl OpSubgraph {
     /// Creates a subgraph from a list of nodes
     /// in the subgraph.
     ///
     /// # Panics
     /// Panics if the conditions in the type-level docs
     /// are not met.
-    pub fn from_nodes(graph: &'a OpGraph, nodes: Vec<NodeId>) -> Self {
+    pub fn from_nodes(graph: &Arc<OpGraph>, mut nodes: Vec<NodeId>) -> Self {
         assert_eq!(
             nodes
                 .iter()
@@ -37,9 +41,11 @@ impl<'a> OpSubgraph<'a> {
                 }
             }
         }
+        inputs.sort_unstable();
+        nodes.sort_unstable();
         Self {
             nodes,
-            graph,
+            graph: Arc::clone(graph),
             inputs,
         }
     }
@@ -95,7 +101,39 @@ impl<'a> OpSubgraph<'a> {
         vars.into_iter()
     }
 
-    pub fn graph(&self) -> &'a OpGraph {
-        self.graph
+    pub fn graph(&self) -> &Arc<OpGraph> {
+        &self.graph
+    }
+}
+
+impl PartialEq for OpSubgraph {
+    fn eq(&self, other: &Self) -> bool {
+        self.nodes.len() == other.nodes.len()
+            && self
+                .nodes
+                .iter()
+                .zip(other.nodes.iter())
+                .all(|(a, b)| self.graph.get(*a) == other.graph.get(*b))
+            && self.inputs.len() == other.inputs.len()
+            && self
+                .inputs
+                .iter()
+                .zip(other.inputs.iter())
+                .all(|(a, b)| self.graph.get(*a).descriptor() == other.graph.get(*b).descriptor())
+    }
+}
+
+impl Eq for OpSubgraph {}
+
+impl Hash for OpSubgraph {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.nodes.len().hash(state);
+        for node in &self.nodes {
+            self.graph.get(*node).hash(state);
+        }
+        self.inputs.len().hash(state);
+        for node in &self.nodes {
+            self.graph.get(*node).descriptor().hash(state);
+        }
     }
 }

@@ -209,6 +209,7 @@ mod tests {
             Descriptor, OpGraph,
         },
     };
+    use std::sync::Arc;
 
     #[test]
     fn test_generate_kernel() {
@@ -252,7 +253,7 @@ mod tests {
 
         graph.new_output(out_casted);
 
-        let subgraph = OpSubgraph::from_nodes(&graph, vec![c, d, e, out, out_casted]);
+        let subgraph = OpSubgraph::from_nodes(&Arc::new(graph), vec![c, d, e, out, out_casted]);
 
         let kernel = generate_kernel(&subgraph);
         insta::assert_snapshot!(kernel.code);

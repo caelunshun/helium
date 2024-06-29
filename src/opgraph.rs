@@ -115,7 +115,7 @@ fn push_if_absent<T: Eq>(vec: &mut Vec<T>, val: T) {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct Descriptor {
     /// Dimension of the tensor in this node.
     pub dimension: u32,
@@ -127,7 +127,7 @@ slotmap::new_key_type! {
     pub struct NodeId;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Node {
     Input(Input),
     Intermediate(Intermediate),
@@ -144,12 +144,12 @@ impl Node {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Input {
     pub descriptor: Descriptor,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Intermediate {
     pub descriptor: Descriptor,
     pub op: Op,
