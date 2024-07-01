@@ -7,6 +7,7 @@ use std::{
 /// Subset of an `OpGraph` with the guarantee
 /// that exactly one node (the leaf node) has an outgoing edge to a node
 /// not in this subset.
+#[derive(Debug, Clone)]
 pub struct OpSubgraph {
     graph: Arc<OpGraph>,
     nodes: Vec<NodeId>,

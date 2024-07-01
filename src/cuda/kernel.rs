@@ -6,7 +6,10 @@ use crate::{
     opgraph::{NodeId, VarId},
 };
 use ahash::AHashMap;
-use cudarc::nvrtc::{compile_ptx_with_opts, CompileOptions, Ptx};
+use cudarc::{
+    driver::{result::device, sys::CUdevice_attribute, CudaDevice},
+    nvrtc::{compile_ptx_with_opts, CompileOptions, Ptx},
+};
 use std::cell::Cell;
 
 pub mod pointwise;
@@ -18,27 +21,42 @@ pub struct Kernel {
     code: String,
     /// List of inputs to pass to kernel.
     params: Vec<KernelParam>,
-    entrypoint_name: String,
+    entrypoint_name: &'static str,
 }
 
 pub struct CompiledKernel {
     ptx: Ptx,
-    entrypoint_name: String,
+    entrypoint_name: &'static str,
     params: Vec<KernelParam>,
 }
 
 impl CompiledKernel {
-    pub fn new(kernel: &Kernel) -> Result<Self, CudaError> {
+    pub fn new(kernel: &Kernel, device: &CudaDevice) -> Result<Self, CudaError> {
+        let compute_major = unsafe {
+            device::get_attribute(
+                *device.cu_device(),
+                CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
+            )?
+        };
+        let compute_minor = unsafe {
+            device::get_attribute(
+                *device.cu_device(),
+                CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR,
+            )?
+        };
+        let device_arch = format!("compute_{compute_major}{compute_minor}");
+
         let ptx = compile_ptx_with_opts(
             &kernel.code,
             CompileOptions {
+                arch: Some(device_arch.leak()), // TODO remove leak
                 include_paths: vec!["/usr/local/cuda/include".into()], // TODO make cross-platform
                 ..Default::default()
             },
         )?;
         Ok(Self {
             ptx,
-            entrypoint_name: kernel.entrypoint_name.clone(),
+            entrypoint_name: kernel.entrypoint_name,
             params: kernel.params.clone(),
         })
     }
@@ -47,8 +65,8 @@ impl CompiledKernel {
         &self.ptx
     }
 
-    pub fn entrypoint_name(&self) -> &str {
-        &self.entrypoint_name
+    pub fn entrypoint_name(&self) -> &'static str {
+        self.entrypoint_name
     }
 
     pub fn params(&self) -> impl Iterator<Item = KernelParam> + '_ {

@@ -124,7 +124,7 @@ pub fn generate_kernel(subgraph: &OpSubgraph) -> Kernel {
     Kernel {
         code,
         params,
-        entrypoint_name: KERNEL_NAME.to_owned(),
+        entrypoint_name: KERNEL_NAME,
     }
 }
 
@@ -209,6 +209,7 @@ mod tests {
             Descriptor, OpGraph,
         },
     };
+    use cudarc::driver::CudaDevice;
     use std::sync::Arc;
 
     #[test]
@@ -259,6 +260,6 @@ mod tests {
         insta::assert_snapshot!(kernel.code);
         insta::assert_debug_snapshot!(kernel.params);
 
-        CompiledKernel::new(&kernel).unwrap();
+        CompiledKernel::new(&kernel, &CudaDevice::new(0).unwrap()).unwrap();
     }
 }
