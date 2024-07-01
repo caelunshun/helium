@@ -21,6 +21,10 @@ impl Plan {
     pub fn steps(&self) -> impl Iterator<Item = &Step> + '_ {
         self.steps.iter()
     }
+
+    pub fn max_parallelism(&self) -> usize {
+        self.steps.iter().map(|s| s.0.len()).max().unwrap()
+    }
 }
 
 /// On each step, one or more `Instr` execute, potentially
@@ -44,7 +48,7 @@ pub enum Instr {
     /// Free the device memory owned by a node's output tensor.
     FreeTensor(NodeId),
     /// Execute a generated kernel.
-    PointwiseKernel(Arc<LoadedKernel>),
+    PointwiseKernel { kernel: Arc<LoadedKernel> },
     ReductionKernel {
         kernel: Arc<LoadedKernel>,
         reduction_depth: u32,
@@ -55,6 +59,8 @@ pub enum Instr {
 
 #[derive(Debug, Clone)]
 pub struct MatmulInstr {
+    pub a_input: NodeId,
+    pub b_input: NodeId,
     /// Optionally feed the matrices as transposed
     pub transpose_a: bool,
     pub transpose_b: bool,
