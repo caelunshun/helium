@@ -18,7 +18,16 @@ expression: kernel.params
             0,
         ),
     ),
-    Output,
+    Output(
+        NodeId(
+            4v1,
+        ),
+    ),
+    Output(
+        NodeId(
+            5v1,
+        ),
+    ),
     ReductionStride,
     Size,
 ]

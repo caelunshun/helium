@@ -69,7 +69,7 @@ impl<'a> Planner<'a> {
                 // 1) be a pointwise operator
                 // 2) all its dependencies must already be covered
 
-                let next_node = self.graph.get(outbound_edge);
+                //let next_node = self.graph.get(outbound_edge);
             }
         }
         nodes
@@ -100,9 +100,9 @@ impl InstrGraph {
 
     pub fn insert(&mut self, instr: Instr) -> InstrId {
         let dependencies = instr.dependencies();
-        let output = instr.output();
+        let outputs = instr.outputs();
         let id = self.instrs.insert(instr);
-        if let Some(output) = output {
+        for output in outputs {
             self.node_to_instr.insert(output, id);
         }
 

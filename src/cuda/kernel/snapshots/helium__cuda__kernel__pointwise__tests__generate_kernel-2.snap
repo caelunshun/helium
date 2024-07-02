@@ -18,6 +18,10 @@ expression: kernel.params
             0,
         ),
     ),
-    Output,
+    Output(
+        NodeId(
+            7v1,
+        ),
+    ),
     Size,
 ]

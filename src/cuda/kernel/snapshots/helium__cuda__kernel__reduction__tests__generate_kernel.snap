@@ -8,7 +8,7 @@ expression: kernel.code
 
 typedef unsigned int uint32_t;
 
-__global__ void generatedReductionKernel(half *ident0, nv_bfloat16 *ident2, float ident4,  float *out, uint32_t stride, uint32_t totalSize) {
+__global__ void generatedReductionKernel(half *ident0, nv_bfloat16 *ident2, float ident4, half *ident7, float *reductionOut,  uint32_t stride, uint32_t totalSize) {
     extern __shared__ float localReduction[];
 
     uint32_t totalIndex = threadIdx.x + blockDim.x * blockIdx.x;
@@ -24,6 +24,7 @@ __global__ void generatedReductionKernel(half *ident0, nv_bfloat16 *ident2, floa
 float ident3 = ident2[index];
 float ident5 = ident1 * ident4;
 float ident6 = ident5 + ident3;
+ident7[index] = static_cast<half>(ident6);
 float scaledVal = ident6 / stride;
 
         val = scaledVal;
@@ -50,7 +51,7 @@ float scaledVal = ident6 / stride;
 
         // Grid-level reduction
         if (threadIdx.x == 0) {
-            atomicAdd(out + group, val);
+            atomicAdd(reductionOut + group, val);
         }
     }
 }

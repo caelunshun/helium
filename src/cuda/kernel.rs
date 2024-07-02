@@ -80,8 +80,8 @@ pub enum KernelParam {
     Node(NodeId),
     /// Scalar float variable
     Var(VarId),
-    /// Output tensor
-    Output,
+    /// An output tensor
+    Output(NodeId),
     /// Number of elements to operate on; used for pointwise
     /// and reduction
     Size,

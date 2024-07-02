@@ -9,13 +9,13 @@
 
 use crate::{
     cuda::kernel::{
-        pointwise::{generate_pointwise_statements, load_inputs},
+        pointwise::{generate_pointwise_statements, load_inputs, store_outputs},
         Context, Kernel, KernelParam,
     },
     opgraph::{
         op::{Op, ReduceOp},
         subgraph::OpSubgraph,
-        Node,
+        Intermediate, Node,
     },
 };
 use indoc::formatdoc;
@@ -65,25 +65,46 @@ pub fn generate_kernel(subgraph: &OpSubgraph) -> Kernel {
         &mut cx,
     );
 
-    params.push(KernelParam::Output);
-    params.push(KernelParam::ReductionStride);
-    params.push(KernelParam::Size);
+    let reduction_leaf = subgraph
+        .leafs()
+        .find(|id| {
+            matches!(
+                subgraph.graph().get(*id),
+                Node::Intermediate(Intermediate {
+                    op: Op::Reduce(_),
+                    ..
+                })
+            )
+        })
+        .expect("no reduction in subgraph");
 
-    let leaf = subgraph.leaf();
     let pointwise_subgraph = OpSubgraph::from_nodes(
         subgraph.graph(),
-        subgraph.nodes().filter(|n| *n != leaf).collect(),
+        subgraph.nodes().filter(|n| *n != reduction_leaf).collect(),
     );
     pointwise_code.push_str(&generate_pointwise_statements(&pointwise_subgraph, &mut cx));
 
-    let Node::Intermediate(leaf) = subgraph.graph().get(subgraph.leaf()) else {
+    store_outputs(
+        &mut params,
+        &mut params_code,
+        subgraph,
+        &mut pointwise_code,
+        &mut cx,
+    );
+
+    params.push(KernelParam::Output(reduction_leaf));
+    params_code.push_str("float *reductionOut, ");
+    params.push(KernelParam::ReductionStride);
+    params.push(KernelParam::Size);
+
+    let Node::Intermediate(leaf) = subgraph.graph().get(reduction_leaf) else {
         panic!("leaf must be a reduction")
     };
     let Op::Reduce(reduce) = &leaf.op else {
         panic!("leaf must be a reduction")
     };
 
-    let atomic_reduce = atomic_reduce_operation(reduce.op, "out + group", "val");
+    let atomic_reduce = atomic_reduce_operation(reduce.op, "reductionOut + group", "val");
     let init_val = init_val(reduce.op);
 
     let mut input_ident = cx.intermediate(reduce.input);
@@ -102,7 +123,7 @@ pub fn generate_kernel(subgraph: &OpSubgraph) -> Kernel {
 
         typedef unsigned int uint32_t;
 
-        __global__ void {KERNEL_NAME}({params_code} float *out, uint32_t stride, uint32_t totalSize) {{
+        __global__ void {KERNEL_NAME}({params_code} uint32_t stride, uint32_t totalSize) {{
             extern __shared__ float localReduction[];
 
             uint32_t totalIndex = threadIdx.x + blockDim.x * blockIdx.x;
@@ -201,6 +222,8 @@ mod tests {
             depth: 2,
         }));
         graph.new_output(out);
+
+        let out2 = graph.new_output(b);
 
         let subgraph = OpSubgraph::from_nodes(&Arc::new(graph), vec![a, b, out]);
 

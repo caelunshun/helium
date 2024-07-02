@@ -1,6 +1,6 @@
 use crate::{
     cuda::{
-        context::{CudaContext, CudaStream},
+        context::{CudaContext, CudaStream, LoadedKernel},
         cuda_data_type,
         error::CudaError,
         kernel::KernelParam,
@@ -52,6 +52,10 @@ impl TensorMap {
 
     pub fn get(&self, node: NodeId) -> &RawTensor {
         &self.map[node]
+    }
+
+    pub fn get_mut(&mut self, node: NodeId) -> &mut RawTensor {
+        &mut self.map[node]
     }
 }
 
@@ -114,33 +118,27 @@ fn execute_instr(
         Instr::FreeTensor(node_id) => {
             tensors.remove(*node_id);
         }
-        Instr::PointwiseKernel { kernel, output } => {
+        Instr::PointwiseKernel { kernel } => {
             let func = cx
                 .device()
                 .get_func(&kernel.module_name, kernel.func_name)
                 .expect("pointwise module not found?");
 
             let first_input = tensors.get(kernel.first_tensor_input());
+            let shape = first_input.shape().to_vec();
             let len = u32::try_from(first_input.num_elements()).expect("tensor too large");
 
-            let mut output_tensor = RawTensor::new(
-                unsafe { Data::alloc(cx.device(), kernel.output_type, len as usize)? },
-                first_input.shape().to_vec(),
-            );
+            alloc_outputs(kernel, tensors, len, cx, &shape)?;
 
-            let mut params =
-                build_params(tensors, &kernel.params, len, None, &mut output_tensor, bump);
+            let mut params = build_params(tensors, &kernel.params, len, None, bump);
 
             unsafe {
                 func.launch_on_stream(stream.cudarc_stream(), launch_config(len), &mut params)?;
             }
-
-            tensors.insert(*output, output_tensor);
         }
         Instr::ReductionKernel {
             kernel,
             reduction_depth,
-            output,
         } => {
             let func = cx
                 .device()
@@ -148,6 +146,7 @@ fn execute_instr(
                 .expect("reduction module not found?");
 
             let first_input = tensors.get(kernel.first_tensor_input());
+            let shape = first_input.shape().to_vec();
             let len = u32::try_from(first_input.num_elements()).expect("tensor too large");
 
             let output_shape = first_input.shape()
@@ -161,19 +160,16 @@ fn execute_instr(
                 .copied()
                 .sum::<usize>() as u32;
 
-            let mut output_tensor = RawTensor::new(
-                unsafe { Data::alloc(cx.device(), kernel.output_type, output_len as usize)? },
+            alloc_outputs(kernel, tensors, len, cx, &shape)?;
+
+            let reduction_output_tensor = RawTensor::new(
+                unsafe { Data::alloc(cx.device(), DataType::F32, output_len as usize)? },
                 output_shape,
             );
+            tensors.insert(kernel.reduction_output.unwrap(), reduction_output_tensor);
 
-            let mut params = build_params(
-                tensors,
-                &kernel.params,
-                len,
-                Some(reduction_stride),
-                &mut output_tensor,
-                bump,
-            );
+            let mut params =
+                build_params(tensors, &kernel.params, len, Some(reduction_stride), bump);
 
             unsafe {
                 func.launch_on_stream(
@@ -182,8 +178,6 @@ fn execute_instr(
                     &mut params,
                 )?;
             }
-
-            tensors.insert(*output, output_tensor);
         }
         Instr::Matmul(config) => {
             use cudarc::cublaslt::result as cublaslt;
@@ -316,12 +310,30 @@ fn execute_instr(
     Ok(())
 }
 
+fn alloc_outputs(
+    kernel: &LoadedKernel,
+    tensors: &mut TensorMap,
+    len: u32,
+    cx: &CudaContext,
+    shape: &[usize],
+) -> Result<(), CudaError> {
+    for (node, data_type) in &kernel.output_types {
+        if kernel.reduction_output != Some(*node) {
+            let tensor = RawTensor::new(
+                unsafe { Data::alloc(cx.device(), *data_type, len as usize)? },
+                shape,
+            );
+            tensors.insert(*node, tensor);
+        }
+    }
+    Ok(())
+}
+
 fn build_params(
-    tensors: &TensorMap,
+    tensors: &mut TensorMap,
     params: &[KernelParam],
     input_size: u32,
     reduction_stride: Option<u32>,
-    output: &mut RawTensor,
     bump: &Bump,
 ) -> Vec<*mut c_void> {
     let mut raw_params = Vec::new();
@@ -332,9 +344,9 @@ fn build_params(
                 bump.alloc(tensors.get(*node).data().device_ptr()) as *mut *const u8 as *mut c_void
             }
             KernelParam::Var(_) => todo!(),
-            KernelParam::Output => {
-                bump.alloc(output.data_mut().device_ptr_mut()) as *mut *mut u8 as *mut c_void
-            }
+            KernelParam::Output(node) => bump
+                .alloc(tensors.get_mut(*node).data_mut().device_ptr_mut())
+                as *mut *mut u8 as *mut c_void,
             KernelParam::Size => bump.alloc(input_size) as *mut u32 as *mut c_void,
             KernelParam::ReductionStride => {
                 bump.alloc(reduction_stride.unwrap()) as *mut u32 as *mut c_void

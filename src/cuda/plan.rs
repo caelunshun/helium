@@ -52,14 +52,10 @@ pub enum Instr {
     /// Free the device memory owned by a node's output tensor.
     FreeTensor(NodeId),
     /// Execute a generated kernel.
-    PointwiseKernel {
-        kernel: Arc<LoadedKernel>,
-        output: NodeId,
-    },
+    PointwiseKernel { kernel: Arc<LoadedKernel> },
     ReductionKernel {
         kernel: Arc<LoadedKernel>,
         reduction_depth: u32,
-        output: NodeId,
     },
     /// Execute a matmul with cublasLT.
     Matmul(MatmulInstr),
@@ -88,13 +84,13 @@ impl Instr {
         }
     }
 
-    pub fn output(&self) -> Option<NodeId> {
+    pub fn outputs(&self) -> Vec<NodeId> {
         match self {
-            Instr::FreeTensor(_) => None,
-            Instr::PointwiseKernel { output, .. } | Instr::ReductionKernel { output, .. } => {
-                Some(*output)
+            Instr::FreeTensor(_) => Vec::new(),
+            Instr::PointwiseKernel { kernel, .. } | Instr::ReductionKernel { kernel, .. } => {
+                kernel.output_types.keys().copied().collect()
             }
-            Instr::Matmul(config) => Some(config.output),
+            Instr::Matmul(config) => vec![config.output],
         }
     }
 }

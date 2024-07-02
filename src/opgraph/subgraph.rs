@@ -4,9 +4,7 @@ use std::{
     sync::Arc,
 };
 
-/// Subset of an `OpGraph` with the guarantee
-/// that exactly one node (the leaf node) has an outgoing edge to a node
-/// not in this subset.
+/// Subset of an `OpGraph`.
 #[derive(Debug, Clone)]
 pub struct OpSubgraph {
     graph: Arc<OpGraph>,
@@ -22,18 +20,6 @@ impl OpSubgraph {
     /// Panics if the conditions in the type-level docs
     /// are not met.
     pub fn from_nodes(graph: &Arc<OpGraph>, mut nodes: Vec<NodeId>) -> Self {
-        assert_eq!(
-            nodes
-                .iter()
-                .copied()
-                .filter(|&id| graph
-                    .outbound_edges(id)
-                    .iter()
-                    .any(|input| !nodes.contains(input)))
-                .count(),
-            1,
-            "number of leaf nodes must be exactly 1"
-        );
         let mut inputs = Vec::new();
         for node in &nodes {
             for input in graph.inbound_edges(*node) {
@@ -67,17 +53,13 @@ impl OpSubgraph {
         self.inputs.iter().copied()
     }
 
-    pub fn leaf(&self) -> NodeId {
-        self.nodes
-            .iter()
-            .copied()
-            .find(|&id| {
-                self.graph
-                    .outbound_edges(id)
-                    .iter()
-                    .any(|output| !self.nodes.contains(output))
-            })
-            .expect("no leaf node in subgraph")
+    pub fn leafs(&self) -> impl Iterator<Item = NodeId> + '_ {
+        self.nodes.iter().copied().filter(|&id| {
+            self.graph
+                .outbound_edges(id)
+                .iter()
+                .any(|output| !self.nodes.contains(output))
+        })
     }
 
     pub fn internal_indegree(&self, id: NodeId) -> usize {

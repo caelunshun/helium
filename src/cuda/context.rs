@@ -4,12 +4,12 @@ use crate::{
         kernel::{CompiledKernel, Kernel, KernelParam},
     },
     data_type::DataType,
-    opgraph::{subgraph::OpSubgraph, NodeId},
+    opgraph::{op::Op, subgraph::OpSubgraph, Intermediate, Node, NodeId},
 };
 use ahash::AHashMap;
 use cudarc::{
     cublaslt,
-    cublaslt::sys::{cublasLtContext, cublasLtHandle_t},
+    cublaslt::sys::cublasLtHandle_t,
     driver,
     driver::{sys::CUstream, CudaDevice},
 };
@@ -90,12 +90,30 @@ impl CudaContext {
                     &module_id,
                     &[kernel.entrypoint_name()],
                 )?;
+
+                let mut output_types = AHashMap::new();
+                for param in kernel.params() {
+                    if let KernelParam::Output(node) = param {
+                        output_types
+                            .insert(node, subgraph.graph().get(node).descriptor().data_type);
+                    }
+                }
+
                 Ok(entry
                     .insert(Arc::new(LoadedKernel {
                         params: kernel.params().collect(),
                         module_name: module_id,
                         func_name: kernel.entrypoint_name(),
-                        output_type: subgraph.graph().get(subgraph.leaf()).descriptor().data_type,
+                        output_types,
+                        reduction_output: subgraph.leafs().find(|id| {
+                            matches!(
+                                subgraph.graph().get(*id),
+                                Node::Intermediate(Intermediate {
+                                    op: Op::Reduce(_),
+                                    ..
+                                })
+                            )
+                        }),
                     }))
                     .clone())
             }
@@ -108,7 +126,8 @@ pub struct LoadedKernel {
     pub params: Vec<KernelParam>,
     pub module_name: String,
     pub func_name: &'static str,
-    pub output_type: DataType,
+    pub output_types: AHashMap<NodeId, DataType>,
+    pub reduction_output: Option<NodeId>,
 }
 
 impl LoadedKernel {

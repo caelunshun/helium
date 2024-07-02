@@ -10,7 +10,7 @@ use crate::{
     opgraph::{
         op::{BinaryPointwiseOp, Op, UnaryPointwiseOp},
         subgraph::OpSubgraph,
-        Node,
+        Intermediate, Node,
     },
 };
 use indoc::formatdoc;
@@ -79,6 +79,40 @@ pub fn load_inputs(
     }
 }
 
+pub fn store_outputs(
+    params: &mut Vec<KernelParam>,
+    params_code: &mut String,
+    subgraph: &OpSubgraph,
+    statements: &mut String,
+    cx: &mut Context,
+) {
+    for leaf_id in subgraph.leafs() {
+        if matches!(
+            subgraph.graph().get(leaf_id),
+            Node::Intermediate(Intermediate {
+                op: Op::Reduce(_),
+                ..
+            })
+        ) {
+            // Handled in reduction kernel
+            continue;
+        }
+
+        let descriptor = subgraph.graph().get(leaf_id).descriptor();
+        let data_type = descriptor.data_type;
+        params.push(KernelParam::Output(leaf_id));
+
+        let output_ident = cx.generate_identifier();
+        params_code.push_str(&format!("{} *{output_ident}, ", cpp_type_name(data_type)));
+
+        let value_ident = cx.intermediate(leaf_id);
+        statements.push_str(&format!(
+            "{output_ident}[index] = static_cast<{}>({value_ident});\n",
+            cpp_type_name(data_type)
+        ));
+    }
+}
+
 /// Generates a CUDA C++ kernel that applies a sequence of pointwise
 /// operations to its inputs as defined by the given `OpSubgraph`.
 pub fn generate_kernel(subgraph: &OpSubgraph) -> Kernel {
@@ -96,17 +130,16 @@ pub fn generate_kernel(subgraph: &OpSubgraph) -> Kernel {
         &mut cx,
     );
 
-    // Output tensor
-    let output_type = subgraph.graph().get(subgraph.leaf()).descriptor().data_type;
-    let output_type = cpp_type_name(output_type);
-    params.push(KernelParam::Output);
-    params_code.push_str(&format!("{output_type} *out"));
-
-    params.push(KernelParam::Size);
-
     statements.push_str(&generate_pointwise_statements(subgraph, &mut cx));
 
-    let out_ident = cx.intermediate(subgraph.leaf());
+    store_outputs(
+        &mut params,
+        &mut params_code,
+        subgraph,
+        &mut statements,
+        &mut cx,
+    );
+    params.push(KernelParam::Size);
 
     let code = formatdoc! {"
         #include <cuda_fp16.h>
@@ -114,11 +147,10 @@ pub fn generate_kernel(subgraph: &OpSubgraph) -> Kernel {
 
         typedef unsigned int uint32_t;
 
-        __global__ void {KERNEL_NAME}({params_code}, uint32_t size) {{
+        __global__ void {KERNEL_NAME}({params_code} uint32_t size) {{
             uint32_t index = threadIdx.x + blockIdx.x * blockDim.x;
             if (index >= size) return;
             {statements}
-            out[index] = static_cast<{output_type}>({out_ident});
         }}
     "};
     Kernel {
