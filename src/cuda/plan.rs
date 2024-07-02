@@ -48,10 +48,14 @@ pub enum Instr {
     /// Free the device memory owned by a node's output tensor.
     FreeTensor(NodeId),
     /// Execute a generated kernel.
-    PointwiseKernel { kernel: Arc<LoadedKernel> },
+    PointwiseKernel {
+        kernel: Arc<LoadedKernel>,
+        output: NodeId,
+    },
     ReductionKernel {
         kernel: Arc<LoadedKernel>,
         reduction_depth: u32,
+        output: NodeId,
     },
     /// Execute a matmul with cublasLT.
     Matmul(MatmulInstr),
@@ -70,4 +74,5 @@ pub struct MatmulInstr {
     pub bias_input: Option<NodeId>,
     /// Optional fused ReLU or GeLU on the output
     pub epilogue: cublasLtEpilogue_t,
+    pub output: NodeId,
 }

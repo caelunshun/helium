@@ -114,7 +114,7 @@ fn execute_instr(
         Instr::FreeTensor(node_id) => {
             tensors.remove(*node_id);
         }
-        Instr::PointwiseKernel { kernel } => {
+        Instr::PointwiseKernel { kernel, output } => {
             let func = cx
                 .device()
                 .get_func(&kernel.module_name, kernel.func_name)
@@ -123,20 +123,24 @@ fn execute_instr(
             let first_input = tensors.get(kernel.first_tensor_input());
             let len = u32::try_from(first_input.num_elements()).expect("tensor too large");
 
-            let mut output = RawTensor::new(
+            let mut output_tensor = RawTensor::new(
                 unsafe { Data::alloc(cx.device(), kernel.output_type, len as usize)? },
                 first_input.shape().to_vec(),
             );
 
-            let mut params = build_params(tensors, &kernel.params, len, None, &mut output, bump);
+            let mut params =
+                build_params(tensors, &kernel.params, len, None, &mut output_tensor, bump);
 
             unsafe {
                 func.launch_on_stream(stream.cudarc_stream(), launch_config(len), &mut params)?;
             }
+
+            tensors.insert(*output, output_tensor);
         }
         Instr::ReductionKernel {
             kernel,
             reduction_depth,
+            output,
         } => {
             let func = cx
                 .device()
@@ -157,7 +161,7 @@ fn execute_instr(
                 .copied()
                 .sum::<usize>() as u32;
 
-            let mut output = RawTensor::new(
+            let mut output_tensor = RawTensor::new(
                 unsafe { Data::alloc(cx.device(), kernel.output_type, output_len as usize)? },
                 output_shape,
             );
@@ -167,7 +171,7 @@ fn execute_instr(
                 &kernel.params,
                 len,
                 Some(reduction_stride),
-                &mut output,
+                &mut output_tensor,
                 bump,
             );
 
@@ -178,6 +182,8 @@ fn execute_instr(
                     &mut params,
                 )?;
             }
+
+            tensors.insert(*output, output_tensor);
         }
         Instr::Matmul(config) => {
             use cudarc::cublaslt::result as cublaslt;
@@ -262,7 +268,7 @@ fn execute_instr(
             assert_eq!(a_input.shape().len(), 2);
             assert_eq!(b_input.shape().len(), 2);
 
-            let mut output = RawTensor::new(
+            let mut output_tensor = RawTensor::new(
                 unsafe { Data::alloc(cx.device(), config.output_type, out_len as usize)? },
                 vec![out_cols as usize, out_rows as usize],
             );
@@ -295,7 +301,7 @@ fn execute_instr(
                     b_layout,
                     bias_input.map_or(ptr::null(), |tensor| tensor.data().device_ptr().cast()),
                     c_layout,
-                    output.data_mut().device_ptr_mut().cast(),
+                    output_tensor.data_mut().device_ptr_mut().cast(),
                     d_layout,
                     ptr::null(),
                     ptr::null_mut(),
@@ -303,6 +309,8 @@ fn execute_instr(
                     stream.raw().cast(),
                 )?;
             }
+
+            tensors.insert(config.output, output_tensor);
         }
     }
     Ok(())
