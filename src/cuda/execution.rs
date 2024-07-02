@@ -178,7 +178,7 @@ fn execute_instr(
             unsafe {
                 func.launch_on_stream(
                     stream.cudarc_stream(),
-                    launch_config_for_reduction(len),
+                    launch_config_for_reduction(len, reduction_stride),
                     &mut params,
                 )?;
             }
@@ -357,9 +357,13 @@ fn launch_config(len: u32) -> LaunchConfig {
     }
 }
 
-fn launch_config_for_reduction(len: u32) -> LaunchConfig {
+fn launch_config_for_reduction(len: u32, stride: u32) -> LaunchConfig {
+    let blocks_per_group = (stride + BLOCK_DIM - 1) / BLOCK_DIM;
+    let groups = len / stride;
+    let blocks = blocks_per_group * groups;
     LaunchConfig {
+        grid_dim: (blocks, 1, 1),
+        block_dim: (BLOCK_DIM, 1, 1),
         shared_mem_bytes: BLOCK_DIM * mem::size_of::<f32>() as u32,
-        ..launch_config(len)
     }
 }
