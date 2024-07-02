@@ -8,6 +8,8 @@ use crate::{
 };
 use ahash::AHashMap;
 use cudarc::{
+    cublaslt,
+    cublaslt::sys::{cublasLtContext, cublasLtHandle_t},
     driver,
     driver::{sys::CUstream, CudaDevice},
 };
@@ -28,6 +30,7 @@ use thread_local::ThreadLocal;
 pub struct CudaContext {
     device: Arc<CudaDevice>,
     stream_pool: Arc<ThreadLocal<Vec<CudaStream>>>,
+    cublaslt_pool: Arc<ThreadLocal<CublasLtContext>>,
     /// Maps subgraphs to compiled + loaded kernels.
     kernel_cache: Arc<Mutex<AHashMap<OpSubgraph, Arc<LoadedKernel>>>>,
     next_module_id: Arc<AtomicU64>,
@@ -39,6 +42,7 @@ impl CudaContext {
         Ok(Self {
             device,
             stream_pool: Arc::new(ThreadLocal::new()),
+            cublaslt_pool: Arc::new(ThreadLocal::new()),
             kernel_cache: Arc::new(Mutex::new(AHashMap::new())),
             next_module_id: Arc::new(AtomicU64::new(0)),
         })
@@ -55,6 +59,10 @@ impl CudaContext {
                 Ok(streams)
             })
             .map(Vec::as_slice)
+    }
+
+    pub fn cublaslt_handle(&self) -> Result<&CublasLtContext, CudaError> {
+        self.cublaslt_pool.get_or_try(|| CublasLtContext::new())
     }
 
     pub fn device(&self) -> &Arc<CudaDevice> {
@@ -137,3 +145,18 @@ impl CudaStream {
 }
 
 unsafe impl Send for CudaStream {}
+
+pub struct CublasLtContext(cublasLtHandle_t);
+
+impl CublasLtContext {
+    pub fn new() -> Result<Self, CudaError> {
+        let cx = cublaslt::result::create_handle()?;
+        Ok(Self(cx))
+    }
+
+    pub fn raw(&self) -> cublasLtHandle_t {
+        self.0
+    }
+}
+
+unsafe impl Send for CublasLtContext {}

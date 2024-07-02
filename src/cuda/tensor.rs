@@ -25,6 +25,14 @@ impl RawTensor {
         &self.shape
     }
 
+    pub fn dim_at(&self, x: i32) -> usize {
+        if x < 0 {
+            self.shape[self.shape.len() - x.abs() as usize]
+        } else {
+            self.shape[x as usize]
+        }
+    }
+
     pub fn num_elements(&self) -> usize {
         self.shape.iter().copied().sum()
     }
@@ -35,6 +43,10 @@ impl RawTensor {
 
     pub fn data_mut(&mut self) -> &mut Data {
         &mut self.data
+    }
+
+    pub fn data_type(&self) -> DataType {
+        self.data.data_type()
     }
 }
 
@@ -70,6 +82,14 @@ impl Data {
             Data::F32(d) => *d.device_ptr_mut() as usize as *mut u8,
             Data::Bf16(d) => *d.device_ptr_mut() as usize as *mut u8,
             Data::F16(d) => *d.device_ptr_mut() as usize as *mut u8,
+        }
+    }
+
+    pub fn data_type(&self) -> DataType {
+        match self {
+            Data::F32(_) => DataType::F32,
+            Data::Bf16(_) => DataType::Bf16,
+            Data::F16(_) => DataType::F16,
         }
     }
 }

@@ -1,23 +1,35 @@
 use crate::{
     cuda::{
         context::{CudaContext, CudaStream},
+        cuda_data_type,
         error::CudaError,
         kernel::KernelParam,
         plan::{Instr, Plan},
         tensor::{Data, RawTensor},
     },
+    data_type::DataType,
     opgraph::NodeId,
 };
 use bumpalo::Bump;
 use cudarc::{
+    cublas::sys::cublasOperation_t::CUBLAS_OP_T,
+    cublaslt::sys::{
+        cublasComputeType_t::{CUBLAS_COMPUTE_16F, CUBLAS_COMPUTE_32F_FAST_TF32},
+        cublasLtMatmulDescAttributes_t::{
+            CUBLASLT_MATMUL_DESC_EPILOGUE, CUBLASLT_MATMUL_DESC_TRANSA, CUBLASLT_MATMUL_DESC_TRANSB,
+        },
+        cudaDataType::CUDA_R_32F,
+        cudaDataType_t::CUDA_R_16F,
+    },
     driver,
     driver::{
         sys::{CUevent_flags, CUevent_wait_flags},
         DriverError, LaunchAsync, LaunchConfig,
     },
 };
+use half::f16;
 use slotmap::SecondaryMap;
-use std::{ffi::c_void, mem};
+use std::{ffi::c_void, mem, ptr};
 
 /// Maps nodes to the tensors containing their output data.
 #[derive(Default)]
@@ -76,6 +88,7 @@ pub fn execute_plan(
 
         for (i, instr) in step.instrs().enumerate() {
             let stream = &streams[i % streams.len()];
+            execute_instr(instr, stream, cx, &bump, &mut tensors)?;
         }
 
         for (stream, event) in streams.iter().zip(&events) {
@@ -83,6 +96,8 @@ pub fn execute_plan(
                 driver::result::event::record(*event, stream.raw())?;
             }
         }
+
+        bump.reset();
     }
 
     Ok(tensors)
@@ -165,7 +180,129 @@ fn execute_instr(
             }
         }
         Instr::Matmul(config) => {
-            todo!()
+            use cudarc::cublaslt::result as cublaslt;
+
+            let a_input = tensors.get(config.a_input);
+            let b_input = tensors.get(config.b_input);
+            let bias_input = config.bias_input.map(|id| tensors.get(id));
+
+            let (compute_type, scale_type) =
+                if a_input.data_type() == DataType::F16 && b_input.data_type() == DataType::F16 {
+                    (CUBLAS_COMPUTE_16F, CUDA_R_16F)
+                } else {
+                    (CUBLAS_COMPUTE_32F_FAST_TF32, CUDA_R_32F)
+                };
+
+            let matmul_desc = cublaslt::create_matmul_desc(compute_type, scale_type)?;
+
+            unsafe {
+                cublaslt::set_matmul_desc_attribute(
+                    matmul_desc,
+                    CUBLASLT_MATMUL_DESC_EPILOGUE,
+                    &config.epilogue as *const _ as *const _,
+                    size_of_val(&config.epilogue),
+                )?;
+
+                if config.transpose_a {
+                    cublaslt::set_matmul_desc_attribute(
+                        matmul_desc,
+                        CUBLASLT_MATMUL_DESC_TRANSA,
+                        &CUBLAS_OP_T as *const _ as *const _,
+                        size_of_val(&CUBLAS_OP_T),
+                    )?;
+                }
+                if config.transpose_b {
+                    cublaslt::set_matmul_desc_attribute(
+                        matmul_desc,
+                        CUBLASLT_MATMUL_DESC_TRANSB,
+                        &CUBLAS_OP_T as *const _ as *const _,
+                        size_of_val(&CUBLAS_OP_T),
+                    )?;
+                }
+            }
+
+            let a_layout = cublaslt::create_matrix_layout(
+                cuda_data_type(a_input.data_type()),
+                a_input.dim_at(-1) as u64,
+                a_input.dim_at(-2) as u64,
+                a_input.dim_at(-1) as i64,
+            )?;
+
+            let b_layout = cublaslt::create_matrix_layout(
+                cuda_data_type(b_input.data_type()),
+                b_input.dim_at(-1) as u64,
+                b_input.dim_at(-2) as u64,
+                b_input.dim_at(-1) as i64,
+            )?;
+
+            let c_layout = match bias_input {
+                Some(bias) => {
+                    cublaslt::create_matrix_layout(
+                        cuda_data_type(bias.data_type()),
+                        bias.dim_at(-1) as u64,
+                        bias.dim_at(-2) as u64,
+                        0, // column broadcast
+                    )?
+                }
+                None => ptr::null_mut(),
+            };
+
+            let out_rows = a_input.dim_at(-1) as u64;
+            let out_cols = a_input.dim_at(-2) as u64;
+            let out_len = out_rows * out_cols;
+
+            let d_layout = cublaslt::create_matrix_layout(
+                cuda_data_type(config.output_type),
+                out_rows,
+                out_cols,
+                out_rows as i64,
+            )?;
+
+            // TODO: batched matmul support
+            assert_eq!(a_input.shape().len(), 2);
+            assert_eq!(b_input.shape().len(), 2);
+
+            let mut output = RawTensor::new(
+                unsafe { Data::alloc(cx.device(), config.output_type, out_len as usize)? },
+                vec![out_cols as usize, out_rows as usize],
+            );
+
+            let alpha = if scale_type == CUDA_R_16F {
+                bump.alloc(f16::ONE) as *const _ as *const c_void
+            } else {
+                bump.alloc(1.0f32) as *const _ as *const c_void
+            };
+            let beta = if config.bias_input.is_some() {
+                1.0
+            } else {
+                0.0
+            };
+            let beta = if scale_type == CUDA_R_16F {
+                bump.alloc(f16::from_f32(beta)) as *const _ as *const c_void
+            } else {
+                bump.alloc(beta) as *const _ as *const c_void
+            };
+
+            unsafe {
+                cublaslt::matmul(
+                    cx.cublaslt_handle()?.raw(),
+                    matmul_desc,
+                    alpha,
+                    beta,
+                    a_input.data().device_ptr().cast(),
+                    a_layout,
+                    b_input.data().device_ptr().cast(),
+                    b_layout,
+                    bias_input.map_or(ptr::null(), |tensor| tensor.data().device_ptr().cast()),
+                    c_layout,
+                    output.data_mut().device_ptr_mut().cast(),
+                    d_layout,
+                    ptr::null(),
+                    ptr::null_mut(),
+                    0,
+                    stream.raw().cast(),
+                )?;
+            }
         }
     }
     Ok(())

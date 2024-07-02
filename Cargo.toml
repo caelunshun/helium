@@ -25,6 +25,7 @@ features = [
     "std",
     "cuda-12050",
     "driver",
+    "cublas",
     "cublaslt",
     "curand",
     "cudnn",

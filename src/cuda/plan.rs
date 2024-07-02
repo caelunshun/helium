@@ -1,4 +1,4 @@
-use crate::{cuda::context::LoadedKernel, opgraph::NodeId};
+use crate::{cuda::context::LoadedKernel, data_type::DataType, opgraph::NodeId};
 use cudarc::cublaslt::sys::cublasLtEpilogue_t;
 use std::sync::Arc;
 
@@ -61,6 +61,7 @@ pub enum Instr {
 pub struct MatmulInstr {
     pub a_input: NodeId,
     pub b_input: NodeId,
+    pub output_type: DataType,
     /// Optionally feed the matrices as transposed
     pub transpose_a: bool,
     pub transpose_b: bool,
