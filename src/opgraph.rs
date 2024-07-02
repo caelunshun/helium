@@ -60,6 +60,10 @@ impl OpGraph {
         node
     }
 
+    pub fn nodes(&self) -> impl Iterator<Item = NodeId> + '_ {
+        self.nodes.keys()
+    }
+
     pub fn get(&self, id: NodeId) -> &Node {
         &self.nodes[id]
     }

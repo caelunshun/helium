@@ -18,7 +18,7 @@ pub mod reduction;
 #[derive(Debug, Clone)]
 pub struct Kernel {
     /// CUDA C++ code
-    code: String,
+    pub code: String,
     /// List of inputs to pass to kernel.
     params: Vec<KernelParam>,
     entrypoint_name: &'static str,

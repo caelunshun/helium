@@ -7,7 +7,7 @@ expression: kernel.code
 
 typedef unsigned int uint32_t;
 
-__global__ void generatedPointwiseKernel(nv_bfloat16 *ident0, float *ident2, float ident4, half *ident10,  uint32_t size) {
+extern "C" __global__ void generatedPointwiseKernel(nv_bfloat16 *ident0, float *ident2, float ident4, half *ident10,  uint32_t size) {
     uint32_t index = threadIdx.x + blockIdx.x * blockDim.x;
     if (index >= size) return;
     float ident1 = ident0[index];

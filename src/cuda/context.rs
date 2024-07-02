@@ -15,7 +15,7 @@ use cudarc::{
 };
 use parking_lot::Mutex;
 use std::{
-    collections::hash_map::Entry,
+    collections::{hash_map::Entry, BTreeMap},
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
@@ -77,13 +77,15 @@ impl CudaContext {
     pub fn get_or_init_kernel(
         &self,
         subgraph: &OpSubgraph,
-        generate_kernel: impl FnOnce(&OpSubgraph) -> Kernel,
+        generate_kernel: impl FnOnce() -> Kernel,
     ) -> Result<Arc<LoadedKernel>, CudaError> {
         match self.kernel_cache.lock().entry(subgraph.clone()) {
             Entry::Occupied(entry) => Ok(entry.get().clone()),
             Entry::Vacant(entry) => {
-                let kernel = generate_kernel(subgraph);
+                let kernel = generate_kernel();
+                println!("{}", kernel.code);
                 let kernel = CompiledKernel::new(&kernel, &self.device)?;
+                dbg!(kernel.entrypoint_name());
                 let module_id = self.new_module_id();
                 self.device.load_ptx(
                     kernel.ptx().clone(),
@@ -91,7 +93,7 @@ impl CudaContext {
                     &[kernel.entrypoint_name()],
                 )?;
 
-                let mut output_types = AHashMap::new();
+                let mut output_types = BTreeMap::new();
                 for param in kernel.params() {
                     if let KernelParam::Output(node) = param {
                         output_types
@@ -126,7 +128,7 @@ pub struct LoadedKernel {
     pub params: Vec<KernelParam>,
     pub module_name: String,
     pub func_name: &'static str,
-    pub output_types: AHashMap<NodeId, DataType>,
+    pub output_types: BTreeMap<NodeId, DataType>,
     pub reduction_output: Option<NodeId>,
 }
 

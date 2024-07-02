@@ -33,8 +33,8 @@ fn reduce_operation(reduction: ReduceOp, a: &str, b: &str) -> String {
 fn atomic_reduce_operation(reduction: ReduceOp, addr: &str, val: &str) -> String {
     match reduction {
         ReduceOp::Sum | ReduceOp::Mean => format!("atomicAdd({addr}, {val});"),
-        ReduceOp::Max => format!("atomicMax({addr}, {val});"),
-        ReduceOp::Min => format!("atomicMin({addr}, {val});"),
+        ReduceOp::Max => format!("atomicMaxFloat({addr}, {val});"),
+        ReduceOp::Min => format!("atomicMinFloat({addr}, {val});"),
     }
 }
 
@@ -120,10 +120,27 @@ pub fn generate_kernel(subgraph: &OpSubgraph) -> Kernel {
         #include <cuda_fp16.h>
         #include <cuda_bf16.h>
         #include <cuda_runtime.h>
+        #include <math_constants.h>
 
         typedef unsigned int uint32_t;
 
-        __global__ void {KERNEL_NAME}({params_code} uint32_t stride, uint32_t totalSize) {{
+        __device__ __forceinline__ float atomicMinFloat (float *addr, float value) {{
+            float old;
+            old = (value >= 0) ? __int_as_float(atomicMin((int *)addr, __float_as_int(value))) :
+                __uint_as_float(atomicMax((unsigned int *)addr, __float_as_uint(value)));
+    
+            return old;
+        }}
+
+        __device__ __forceinline__ float atomicMaxFloat(float *addr, float value) {{
+            float old;
+            old = (value >= 0) ? __int_as_float(atomicMax((int *)addr, __float_as_int(value))) :
+                __uint_as_float(atomicMin((unsigned int *)addr, __float_as_uint(value)));
+    
+            return old;
+        }}
+
+        extern \"C\" __global__ void {KERNEL_NAME}({params_code} uint32_t stride, uint32_t totalSize) {{
             extern __shared__ float localReduction[];
 
             uint32_t totalIndex = threadIdx.x + blockDim.x * blockIdx.x;

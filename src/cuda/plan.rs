@@ -41,6 +41,10 @@ impl Step {
         Self(instr.into_iter().collect())
     }
 
+    pub fn push(&mut self, instr: Instr) {
+        self.0.push(instr);
+    }
+
     pub fn instrs(&self) -> impl Iterator<Item = &Instr> + '_ {
         self.0.iter()
     }

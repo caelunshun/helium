@@ -37,7 +37,7 @@ fn generate_for_unary(op: UnaryPointwiseOp, input: &str, cx: &Context) -> String
         UnaryPointwiseOp::Sin => format!("sinf({input})"),
         UnaryPointwiseOp::Cos => format!("cosf({input})"),
         UnaryPointwiseOp::Tan => format!("tanf({input})"),
-        UnaryPointwiseOp::Sigmoid => format!("1.0 / (1.0 + expf({input})"),
+        UnaryPointwiseOp::Sigmoid => format!("1.0 / (1.0 + expf({input}))"),
         UnaryPointwiseOp::Tanh => format!("tanhf{input})"),
         UnaryPointwiseOp::Relu => format!("fmaxf(0, {input})"),
     }
@@ -147,7 +147,7 @@ pub fn generate_kernel(subgraph: &OpSubgraph) -> Kernel {
 
         typedef unsigned int uint32_t;
 
-        __global__ void {KERNEL_NAME}({params_code} uint32_t size) {{
+        extern \"C\" __global__ void {KERNEL_NAME}({params_code} uint32_t size) {{
             uint32_t index = threadIdx.x + blockIdx.x * blockDim.x;
             if (index >= size) return;
             {statements}
