@@ -77,6 +77,21 @@ Plan {
                         ),
                     },
                 ),
+                FreeTensor(
+                    NodeId(
+                        1v1,
+                    ),
+                ),
+                FreeTensor(
+                    NodeId(
+                        2v1,
+                    ),
+                ),
+                FreeTensor(
+                    NodeId(
+                        3v1,
+                    ),
+                ),
             ],
         ),
         Step(

@@ -83,9 +83,7 @@ impl CudaContext {
             Entry::Occupied(entry) => Ok(entry.get().clone()),
             Entry::Vacant(entry) => {
                 let kernel = generate_kernel();
-                println!("{}", kernel.code);
                 let kernel = CompiledKernel::new(&kernel, &self.device)?;
-                dbg!(kernel.entrypoint_name());
                 let module_id = self.new_module_id();
                 self.device.load_ptx(
                     kernel.ptx().clone(),

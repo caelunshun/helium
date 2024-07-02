@@ -253,6 +253,7 @@ struct InstrGraph {
     instrs: SlotMap<InstrId, Instr>,
     inbound_edges: SecondaryMap<InstrId, Vec<InstrId>>,
     outbound_edges: SecondaryMap<InstrId, Vec<InstrId>>,
+    optimized_node_dependents: SecondaryMap<NodeId, Vec<InstrId>>,
 }
 
 impl InstrGraph {
@@ -280,6 +281,12 @@ impl InstrGraph {
                     .or_default()
                     .push(id);
             }
+
+            self.optimized_node_dependents
+                .entry(dep)
+                .unwrap()
+                .or_default()
+                .push(id);
         }
         self.inbound_edges.insert(
             id,
@@ -296,7 +303,7 @@ impl InstrGraph {
     ///
     /// This also inserts `FreeTensor` instructions as soon
     /// as particular tensors are no longer needed.
-    pub fn into_plan(mut self, op_graph: &OpGraph) -> Plan {
+    pub fn into_plan(self, op_graph: &OpGraph) -> Plan {
         let mut plan = Plan::new();
 
         let mut indegrees = SecondaryMap::default();
@@ -316,13 +323,17 @@ impl InstrGraph {
 
             for output in self.instrs[instr].outputs() {
                 let outdegree = self
-                    .outbound_edges
-                    .get(instr)
+                    .optimized_node_dependents
+                    .get(output)
                     .map(Vec::as_slice)
                     .unwrap_or_default()
                     .len();
                 outdegrees.insert(output, outdegree);
             }
+        }
+
+        for &input in op_graph.inputs() {
+            outdegrees.insert(input, op_graph.outbound_edges(input).len());
         }
 
         let mut free_tensors = Vec::new();
@@ -352,18 +363,11 @@ impl InstrGraph {
                     }
                 }
 
-                for &inbound in self
-                    .inbound_edges
-                    .get(instr)
-                    .map(Vec::as_slice)
-                    .unwrap_or_default()
-                {
-                    for output in self.instrs[inbound].outputs() {
-                        let outdegree = &mut outdegrees[output];
-                        *outdegree = outdegree.checked_sub(1).unwrap();
-                        if *outdegree == 0 {
-                            free_tensors.push(output);
-                        }
+                for node in self.instrs[instr].dependencies() {
+                    let outdegree = &mut outdegrees[node];
+                    *outdegree = outdegree.checked_sub(1).unwrap();
+                    if *outdegree == 0 {
+                        free_tensors.push(node);
                     }
                 }
             }
