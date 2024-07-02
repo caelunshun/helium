@@ -1,4 +1,8 @@
-use crate::{cuda::context::LoadedKernel, data_type::DataType, opgraph::NodeId};
+use crate::{
+    cuda::{context::LoadedKernel, kernel::KernelParam},
+    data_type::DataType,
+    opgraph::NodeId,
+};
 use cudarc::cublaslt::sys::cublasLtEpilogue_t;
 use std::sync::Arc;
 
@@ -59,6 +63,40 @@ pub enum Instr {
     },
     /// Execute a matmul with cublasLT.
     Matmul(MatmulInstr),
+}
+
+impl Instr {
+    pub fn dependencies(&self) -> Vec<NodeId> {
+        match self {
+            Instr::FreeTensor(id) => vec![*id],
+            Instr::PointwiseKernel { kernel, .. } | Instr::ReductionKernel { kernel, .. } => {
+                let mut deps = Vec::new();
+                for param in &kernel.params {
+                    if let KernelParam::Node(id) = param {
+                        deps.push(*id);
+                    }
+                }
+                deps
+            }
+            Instr::Matmul(config) => {
+                let mut deps = vec![config.a_input, config.b_input];
+                if let Some(bias) = config.bias_input {
+                    deps.push(bias);
+                }
+                deps
+            }
+        }
+    }
+
+    pub fn output(&self) -> Option<NodeId> {
+        match self {
+            Instr::FreeTensor(_) => None,
+            Instr::PointwiseKernel { output, .. } | Instr::ReductionKernel { output, .. } => {
+                Some(*output)
+            }
+            Instr::Matmul(config) => Some(config.output),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

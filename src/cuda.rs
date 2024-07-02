@@ -10,6 +10,7 @@ pub mod error;
 mod execution;
 mod kernel;
 mod plan;
+mod planner;
 pub mod tensor;
 
 fn cuda_data_type(data_type: DataType) -> cudaDataType {

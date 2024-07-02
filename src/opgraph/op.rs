@@ -58,6 +58,13 @@ impl Op {
             Op::ChangeDataType(_) => OpKind::ChangeDataType,
         }
     }
+
+    pub fn is_pointwise(&self) -> bool {
+        matches!(
+            self.kind(),
+            OpKind::UnaryPointwise | OpKind::BinaryPointwise | OpKind::ChangeDataType
+        )
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
