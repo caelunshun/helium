@@ -11,11 +11,15 @@ use cudarc::{
     cublaslt,
     cublaslt::sys::cublasLtHandle_t,
     driver,
-    driver::{sys::CUstream, CudaDevice},
+    driver::{
+        sys::{CUmemPool_attribute, CUmemPool_attribute_enum, CUstream},
+        CudaDevice,
+    },
 };
 use parking_lot::Mutex;
 use std::{
     collections::{hash_map::Entry, BTreeMap},
+    ptr,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
@@ -39,6 +43,19 @@ pub struct CudaContext {
 impl CudaContext {
     pub fn new(device_index: u32) -> Result<Self, CudaError> {
         let device = CudaDevice::new_with_stream(device_index as usize)?;
+
+        unsafe {
+            let mut mem_pool = ptr::null_mut();
+            let res =
+                driver::sys::lib().cuDeviceGetDefaultMemPool(&mut mem_pool, *device.cu_device());
+            let mut release_threshold = 1024u64 * 1024 * 1024;
+            driver::sys::lib().cuMemPoolSetAttribute(
+                mem_pool,
+                CUmemPool_attribute_enum::CU_MEMPOOL_ATTR_RELEASE_THRESHOLD,
+                &mut release_threshold as *mut _ as *mut _,
+            );
+        }
+
         Ok(Self {
             device,
             stream_pool: Arc::new(ThreadLocal::new()),

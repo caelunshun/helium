@@ -1,6 +1,11 @@
-use crate::{cuda::error::CudaError, data_type::DataType};
-use cudarc::driver::{CudaDevice, CudaSlice, DevicePtr, DevicePtrMut, DriverError};
-use half::{bf16, f16};
+use crate::{
+    cuda::{context::CudaStream, error::CudaError},
+    data_type::DataType,
+};
+use cudarc::{
+    driver,
+    driver::{sys::CUdeviceptr, CudaDevice},
+};
 use std::sync::Arc;
 
 /// Raw CUDA tensor.
@@ -48,48 +53,75 @@ impl RawTensor {
     pub fn data_type(&self) -> DataType {
         self.data.data_type()
     }
+
+    pub fn into_data(self) -> Data {
+        self.data
+    }
 }
 
-pub enum Data {
-    F32(CudaSlice<f32>),
-    Bf16(CudaSlice<bf16>),
-    F16(CudaSlice<f16>),
+pub struct Data {
+    device: Arc<CudaDevice>,
+    ptr: CUdeviceptr,
+    typ: DataType,
 }
+
+unsafe impl Send for Data {}
+unsafe impl Sync for Data {}
 
 impl Data {
     pub unsafe fn alloc(
         device: &Arc<CudaDevice>,
         data_type: DataType,
         len: usize,
-    ) -> Result<Self, DriverError> {
-        match data_type {
-            DataType::F32 => device.alloc(len).map(Self::F32),
-            DataType::Bf16 => device.alloc(len).map(Self::Bf16),
-            DataType::F16 => device.alloc(len).map(Self::F16),
+    ) -> Result<Self, CudaError> {
+        let num_bytes = len * data_type.size();
+        let ptr = unsafe { driver::result::malloc_sync(num_bytes)? };
+        Ok(Self {
+            device: Arc::clone(device),
+            ptr,
+            typ: data_type,
+        })
+    }
+
+    pub unsafe fn alloc_async(
+        device: &Arc<CudaDevice>,
+        stream: &CudaStream,
+        data_type: DataType,
+        len: usize,
+    ) -> Result<Self, CudaError> {
+        let num_bytes = len * data_type.size();
+        let ptr = unsafe { driver::result::malloc_async(stream.raw(), num_bytes)? };
+        Ok(Self {
+            device: Arc::clone(device),
+            ptr,
+            typ: data_type,
+        })
+    }
+
+    pub unsafe fn free_async(self, stream: &CudaStream) -> Result<(), CudaError> {
+        unsafe {
+            driver::result::free_async(self.ptr, stream.raw())?;
         }
+        Ok(())
     }
 
     pub fn device_ptr(&self) -> *const u8 {
-        match self {
-            Data::F32(d) => *d.device_ptr() as usize as *const u8,
-            Data::Bf16(d) => *d.device_ptr() as usize as *const u8,
-            Data::F16(d) => *d.device_ptr() as usize as *const u8,
-        }
+        self.ptr as *const u8
     }
 
     pub fn device_ptr_mut(&mut self) -> *mut u8 {
-        match self {
-            Data::F32(d) => *d.device_ptr_mut() as usize as *mut u8,
-            Data::Bf16(d) => *d.device_ptr_mut() as usize as *mut u8,
-            Data::F16(d) => *d.device_ptr_mut() as usize as *mut u8,
-        }
+        self.ptr as *mut u8
     }
 
     pub fn data_type(&self) -> DataType {
-        match self {
-            Data::F32(_) => DataType::F32,
-            Data::Bf16(_) => DataType::Bf16,
-            Data::F16(_) => DataType::F16,
+        self.typ
+    }
+}
+
+impl Drop for Data {
+    fn drop(&mut self) {
+        unsafe {
+            driver::result::free_sync(self.ptr).ok();
         }
     }
 }

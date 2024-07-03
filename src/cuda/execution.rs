@@ -115,9 +115,13 @@ fn execute_instr(
     tensors: &mut TensorMap,
 ) -> Result<(), CudaError> {
     match instr {
-        Instr::FreeTensor(node_id) => {
-            tensors.remove(*node_id);
-        }
+        Instr::FreeTensor(node_id) => unsafe {
+            tensors
+                .remove(*node_id)
+                .unwrap()
+                .into_data()
+                .free_async(stream)?;
+        },
         Instr::PointwiseKernel { kernel } => {
             let func = cx
                 .device()
@@ -128,7 +132,7 @@ fn execute_instr(
             let shape = first_input.shape().to_vec();
             let len = u32::try_from(first_input.num_elements()).expect("tensor too large");
 
-            alloc_outputs(kernel, tensors, len, cx, &shape)?;
+            alloc_outputs(kernel, tensors, len, cx, stream, &shape)?;
 
             let mut params = build_params(tensors, &kernel.params, len, None, bump);
 
@@ -160,10 +164,12 @@ fn execute_instr(
                 .copied()
                 .sum::<usize>() as u32;
 
-            alloc_outputs(kernel, tensors, len, cx, &shape)?;
+            alloc_outputs(kernel, tensors, len, cx, stream, &shape)?;
 
             let reduction_output_tensor = RawTensor::new(
-                unsafe { Data::alloc(cx.device(), DataType::F32, output_len as usize)? },
+                unsafe {
+                    Data::alloc_async(cx.device(), stream, DataType::F32, output_len as usize)?
+                },
                 output_shape,
             );
             tensors.insert(kernel.reduction_output.unwrap(), reduction_output_tensor);
@@ -263,7 +269,9 @@ fn execute_instr(
             assert_eq!(b_input.shape().len(), 2);
 
             let mut output_tensor = RawTensor::new(
-                unsafe { Data::alloc(cx.device(), config.output_type, out_len as usize)? },
+                unsafe {
+                    Data::alloc_async(cx.device(), stream, config.output_type, out_len as usize)?
+                },
                 vec![out_cols as usize, out_rows as usize],
             );
 
@@ -315,12 +323,13 @@ fn alloc_outputs(
     tensors: &mut TensorMap,
     len: u32,
     cx: &CudaContext,
+    stream: &CudaStream,
     shape: &[usize],
 ) -> Result<(), CudaError> {
     for (node, data_type) in &kernel.output_types {
         if kernel.reduction_output != Some(*node) {
             let tensor = RawTensor::new(
-                unsafe { Data::alloc(cx.device(), *data_type, len as usize)? },
+                unsafe { Data::alloc_async(cx.device(), stream, *data_type, len as usize)? },
                 shape,
             );
             tensors.insert(*node, tensor);
