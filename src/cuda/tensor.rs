@@ -6,19 +6,20 @@ use cudarc::{
     driver,
     driver::{sys::CUdeviceptr, CudaDevice},
 };
-use std::sync::Arc;
+use std::{mem, ptr, sync::Arc};
 
 /// Raw CUDA tensor.
+#[derive(Clone)]
 pub struct RawTensor {
     shape: Vec<usize>,
-    data: Data,
+    data: Arc<Data>,
 }
 
 impl RawTensor {
     pub fn new(data: Data, shape: impl Into<Vec<usize>>) -> Self {
         Self {
             shape: shape.into(),
-            data,
+            data: Arc::new(data),
         }
     }
 
@@ -47,7 +48,7 @@ impl RawTensor {
     }
 
     pub fn data_mut(&mut self) -> &mut Data {
-        &mut self.data
+        Arc::get_mut(&mut self.data).unwrap()
     }
 
     pub fn data_type(&self) -> DataType {
@@ -55,7 +56,7 @@ impl RawTensor {
     }
 
     pub fn into_data(self) -> Data {
-        self.data
+        Arc::into_inner(self.data).unwrap()
     }
 }
 
@@ -69,20 +70,6 @@ unsafe impl Send for Data {}
 unsafe impl Sync for Data {}
 
 impl Data {
-    pub unsafe fn alloc(
-        device: &Arc<CudaDevice>,
-        data_type: DataType,
-        len: usize,
-    ) -> Result<Self, CudaError> {
-        let num_bytes = len * data_type.size();
-        let ptr = unsafe { driver::result::malloc_sync(num_bytes)? };
-        Ok(Self {
-            device: Arc::clone(device),
-            ptr,
-            typ: data_type,
-        })
-    }
-
     pub unsafe fn alloc_async(
         device: &Arc<CudaDevice>,
         stream: &CudaStream,
@@ -102,6 +89,7 @@ impl Data {
         unsafe {
             driver::result::free_async(self.ptr, stream.raw())?;
         }
+        mem::forget(self);
         Ok(())
     }
 
@@ -121,7 +109,7 @@ impl Data {
 impl Drop for Data {
     fn drop(&mut self) {
         unsafe {
-            driver::result::free_sync(self.ptr).ok();
+            driver::result::free_async(self.ptr, ptr::null_mut()).ok();
         }
     }
 }

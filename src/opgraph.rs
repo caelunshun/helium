@@ -22,6 +22,36 @@ impl OpGraph {
         Self::default()
     }
 
+    pub fn merge_into(&self, other: &mut OpGraph) -> SecondaryMap<NodeId, NodeId> {
+        let mut id_mapping = SecondaryMap::new();
+
+        for (node_id, node) in &self.nodes {
+            let new_node_id = other.nodes.insert(node.clone());
+
+            id_mapping.insert(node_id, new_node_id);
+        }
+
+        for node_id in self.nodes.keys() {
+            let new_node_id = id_mapping[node_id];
+            other.outbound_edges.insert(
+                new_node_id,
+                self.outbound_edges(node_id)
+                    .iter()
+                    .map(|&id| id_mapping[id])
+                    .collect(),
+            );
+            other.inbound_edges.insert(
+                new_node_id,
+                self.inbound_edges(node_id)
+                    .iter()
+                    .map(|&id| id_mapping[id])
+                    .collect(),
+            );
+        }
+
+        id_mapping
+    }
+
     /// Creates a new input node.
     pub fn new_input(&mut self, descriptor: Descriptor) -> NodeId {
         let id = self.nodes.insert(Node::Input(Input { descriptor }));
@@ -32,12 +62,8 @@ impl OpGraph {
     /// Creates a new intermediate node with the given operation.
     pub fn new_op(&mut self, op: Op) -> NodeId {
         let inputs = op.inputs();
-        let input_descriptors: Vec<_> = inputs
-            .iter()
-            .map(|id| self.nodes[*id].descriptor())
-            .collect();
         let node = self.nodes.insert(Node::Intermediate(Intermediate {
-            descriptor: op.output_descriptor(&input_descriptors),
+            descriptor: op.output_descriptor(|id| self.get(id).descriptor()),
             op,
         }));
         for &input in &inputs {

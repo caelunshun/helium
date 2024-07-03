@@ -1,8 +1,8 @@
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum DataType {
-    F32,
-    Bf16,
     F16,
+    Bf16,
+    F32,
 }
 
 impl DataType {

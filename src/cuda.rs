@@ -7,10 +7,10 @@ use cudarc::cublaslt::sys::{
 mod allocator;
 pub mod context;
 pub mod error;
-mod execution;
+pub mod execution;
 mod kernel;
-mod plan;
-mod planner;
+pub mod plan;
+pub mod planner;
 pub mod tensor;
 
 fn cuda_data_type(data_type: DataType) -> cudaDataType {

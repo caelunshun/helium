@@ -42,7 +42,7 @@ Plan {
                         output_types: {
                             NodeId(
                                 6v1,
-                            ): Bf16,
+                            ): F32,
                             NodeId(
                                 7v1,
                             ): Bf16,
@@ -67,7 +67,7 @@ Plan {
                         b_input: NodeId(
                             7v1,
                         ),
-                        output_type: Bf16,
+                        output_type: F32,
                         transpose_a: false,
                         transpose_b: false,
                         bias_input: None,

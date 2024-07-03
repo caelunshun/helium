@@ -38,13 +38,54 @@ impl Op {
         }
     }
 
-    pub fn output_descriptor(&self, input_descriptors: &[Descriptor]) -> Descriptor {
+    pub fn output_descriptor(
+        &self,
+        get_input_descriptor: impl Fn(NodeId) -> Descriptor,
+    ) -> Descriptor {
         match self {
-            Op::ChangeDataType(ChangeDataType { target_type, .. }) => Descriptor {
-                dimension: input_descriptors[0].dimension,
+            Op::ChangeDataType(ChangeDataType { target_type, input }) => Descriptor {
+                dimension: get_input_descriptor(*input).dimension,
                 data_type: *target_type,
             },
-            _ => input_descriptors[0],
+            Op::UnaryPointwise(UnaryPointwise { input, .. })
+            | Op::BinaryPointwise(BinaryPointwise { lhs: input, .. })
+            | Op::Transpose(Transpose { input })
+            | Op::Matmul(Matmul { input_a: input, .. }) => get_input_descriptor(*input),
+            Op::Reduce(Reduce { input, depth, .. }) => {
+                let input = get_input_descriptor(*input);
+                Descriptor {
+                    dimension: (input.dimension - *depth).max(1),
+                    data_type: DataType::F32,
+                }
+            }
+        }
+    }
+
+    pub fn output_shape<'a>(&self, get_input_shape: impl Fn(NodeId) -> Vec<usize>) -> Vec<usize> {
+        match self {
+            Op::Matmul(config) => {
+                let shape_a = get_input_shape(config.input_a);
+                let shape_b = get_input_shape(config.input_b);
+
+                let mut out = shape_a.clone();
+                let len = out.len();
+                out[len - 2] = shape_b[shape_b.len() - 2];
+                out
+            }
+            Op::Transpose(config) => {
+                let mut shape = get_input_shape(config.input);
+                tranpose_shape(&mut shape);
+                shape
+            }
+            Op::UnaryPointwise(UnaryPointwise { input, .. })
+            | Op::ChangeDataType(ChangeDataType { input, .. })
+            | Op::BinaryPointwise(BinaryPointwise { lhs: input, .. }) => get_input_shape(*input),
+            Op::Reduce(Reduce { depth, input, .. }) => {
+                let mut shape = get_input_shape(*input);
+                shape.truncate((shape.len() - *depth as usize).max(1));
+
+                shape
+            }
         }
     }
 
@@ -65,6 +106,11 @@ impl Op {
             OpKind::UnaryPointwise | OpKind::BinaryPointwise | OpKind::ChangeDataType
         )
     }
+}
+
+fn tranpose_shape(shape: &mut Vec<usize>) {
+    let len = shape.len();
+    shape.swap(len - 1, len - 2);
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
