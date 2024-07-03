@@ -16,38 +16,56 @@ use cudarc::{
         CudaDevice,
     },
 };
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use std::{
     collections::{hash_map::Entry, BTreeMap},
-    ptr,
+    iter, ptr,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc,
+        Arc, OnceLock,
     },
 };
 use thread_local::ThreadLocal;
 
 /// Shared state for caching CUDA values on a particular device.
-///
-/// Can be cloned like an `Arc`.
-#[derive(Clone)]
 pub struct CudaContext {
     device: Arc<CudaDevice>,
-    stream_pool: Arc<ThreadLocal<Vec<CudaStream>>>,
-    cublaslt_pool: Arc<ThreadLocal<CublasLtContext>>,
+    stream_pool: ThreadLocal<Vec<CudaStream>>,
+    cublaslt_pool: ThreadLocal<CublasLtContext>,
     /// Maps subgraphs to compiled + loaded kernels.
-    kernel_cache: Arc<Mutex<AHashMap<OpSubgraph, Arc<LoadedKernel>>>>,
-    next_module_id: Arc<AtomicU64>,
+    kernel_cache: Mutex<AHashMap<OpSubgraph, Arc<LoadedKernel>>>,
+    next_module_id: AtomicU64,
 }
 
 impl CudaContext {
+    pub fn global(device_index: u32) -> Result<&'static Self, CudaError> {
+        static CONTEXTS: OnceLock<RwLock<Vec<Option<&'static CudaContext>>>> = OnceLock::new();
+        let lock = CONTEXTS.get_or_init(Default::default);
+
+        // Optimistic check with read-only lock
+        let guard = lock.read();
+        if let Some(Some(cx)) = guard.get(device_index as usize) {
+            return Ok(*cx);
+        }
+
+        drop(guard);
+        let mut guard = lock.write();
+        if let Some(Some(cx)) = guard.get(device_index as usize) {
+            return Ok(*cx);
+        }
+
+        let needed_space = device_index as usize + 1 - guard.len();
+        guard.extend(iter::repeat(None).take(needed_space));
+        Ok(guard[device_index as usize].insert(Box::leak(Box::new(Self::new(device_index)?))))
+    }
+
     pub fn new(device_index: u32) -> Result<Self, CudaError> {
         let device = CudaDevice::new_with_stream(device_index as usize)?;
 
         unsafe {
             let mut mem_pool = ptr::null_mut();
-            let res =
-                driver::sys::lib().cuDeviceGetDefaultMemPool(&mut mem_pool, *device.cu_device());
+
+            driver::sys::lib().cuDeviceGetDefaultMemPool(&mut mem_pool, *device.cu_device());
             let mut release_threshold = 1024u64 * 1024 * 1024;
             driver::sys::lib().cuMemPoolSetAttribute(
                 mem_pool,
@@ -58,10 +76,10 @@ impl CudaContext {
 
         Ok(Self {
             device,
-            stream_pool: Arc::new(ThreadLocal::new()),
-            cublaslt_pool: Arc::new(ThreadLocal::new()),
-            kernel_cache: Arc::new(Mutex::new(AHashMap::new())),
-            next_module_id: Arc::new(AtomicU64::new(0)),
+            stream_pool: ThreadLocal::new(),
+            cublaslt_pool: ThreadLocal::new(),
+            kernel_cache: Mutex::new(AHashMap::new()),
+            next_module_id: AtomicU64::new(0),
         })
     }
 
