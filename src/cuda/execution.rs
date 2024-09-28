@@ -7,8 +7,8 @@ use crate::{
         plan::{Instr, Plan},
         tensor::{Data, RawTensor},
     },
-    data_type::DataType,
-    opgraph::NodeId,
+    data_type::{DataType, DataVec},
+    opgraph::{NodeId, VarMap},
 };
 use bumpalo::Bump;
 use cudarc::{
@@ -27,7 +27,7 @@ use cudarc::{
         DriverError, LaunchAsync, LaunchConfig,
     },
 };
-use half::f16;
+use half::{bf16, f16};
 use slotmap::SecondaryMap;
 use std::{ffi::c_void, mem, ptr};
 
@@ -66,6 +66,7 @@ pub fn execute_plan(
     plan: &Plan,
     cx: &CudaContext,
     inputs: TensorMap,
+    vars: &VarMap,
 ) -> Result<TensorMap, CudaError> {
     let mut tensors = inputs;
     let mut bump = Bump::new();
@@ -92,7 +93,7 @@ pub fn execute_plan(
 
         for (i, instr) in step.instrs().enumerate() {
             let stream = &streams[i % streams.len()];
-            execute_instr(instr, stream, cx, &bump, &mut tensors)?;
+            execute_instr(instr, stream, cx, &bump, &mut tensors, vars)?;
         }
 
         for (stream, event) in streams.iter().zip(&events) {
@@ -113,6 +114,7 @@ fn execute_instr(
     cx: &CudaContext,
     bump: &Bump,
     tensors: &mut TensorMap,
+    vars: &VarMap,
 ) -> Result<(), CudaError> {
     match instr {
         Instr::FreeTensor(node_id) => unsafe {
@@ -134,7 +136,7 @@ fn execute_instr(
 
             alloc_outputs(kernel, tensors, len, cx, stream, &shape)?;
 
-            let mut params = build_params(tensors, &kernel.params, len, None, bump);
+            let mut params = build_params(tensors, vars, &kernel.params, len, None, bump);
 
             unsafe {
                 func.launch_on_stream(stream.cudarc_stream(), launch_config(len), &mut params)?;
@@ -174,8 +176,14 @@ fn execute_instr(
             );
             tensors.insert(kernel.reduction_output.unwrap(), reduction_output_tensor);
 
-            let mut params =
-                build_params(tensors, &kernel.params, len, Some(reduction_stride), bump);
+            let mut params = build_params(
+                tensors,
+                vars,
+                &kernel.params,
+                len,
+                Some(reduction_stride),
+                bump,
+            );
 
             unsafe {
                 func.launch_on_stream(
@@ -314,6 +322,33 @@ fn execute_instr(
 
             tensors.insert(config.output, output_tensor);
         }
+        Instr::UploadTensor(instr) => {
+            let (data, shape) = vars.get(instr.data_var).expect_tensor();
+            let tensor = match data {
+                DataVec::F32(data) => RawTensor::from_slice_async::<f32>(
+                    data,
+                    instr.data_type,
+                    shape,
+                    stream,
+                    cx.device(),
+                )?,
+                DataVec::Bf16(data) => RawTensor::from_slice_async::<bf16>(
+                    data,
+                    instr.data_type,
+                    shape,
+                    stream,
+                    cx.device(),
+                )?,
+                DataVec::F16(data) => RawTensor::from_slice_async::<f16>(
+                    data,
+                    instr.data_type,
+                    shape,
+                    stream,
+                    cx.device(),
+                )?,
+            };
+            tensors.insert(instr.output, tensor);
+        }
     }
     Ok(())
 }
@@ -340,6 +375,7 @@ fn alloc_outputs(
 
 fn build_params(
     tensors: &mut TensorMap,
+    vars: &VarMap,
     params: &[KernelParam],
     input_size: u32,
     reduction_stride: Option<u32>,
@@ -352,7 +388,10 @@ fn build_params(
             KernelParam::Node(node) => {
                 bump.alloc(tensors.get(*node).data().device_ptr()) as *mut *const u8 as *mut c_void
             }
-            KernelParam::Var(_) => todo!(),
+            KernelParam::Var(id) => {
+                let x = vars.get(*id).expect_scalar();
+                bump.alloc(x) as *mut f32 as *mut c_void
+            }
             KernelParam::Output(node) => bump
                 .alloc(tensors.get_mut(*node).data_mut().device_ptr_mut())
                 as *mut *mut u8 as *mut c_void,

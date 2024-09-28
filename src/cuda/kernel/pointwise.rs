@@ -40,6 +40,7 @@ fn generate_for_unary(op: UnaryPointwiseOp, input: &str, cx: &Context) -> String
         UnaryPointwiseOp::Sigmoid => format!("1.0 / (1.0 + expf({input}))"),
         UnaryPointwiseOp::Tanh => format!("tanhf{input})"),
         UnaryPointwiseOp::Relu => format!("fmaxf(0, {input})"),
+        UnaryPointwiseOp::Recip => format!("__frcp_rn({input})"),
     }
 }
 
@@ -264,7 +265,7 @@ mod tests {
 
         let d = graph.new_op(Op::UnaryPointwise(UnaryPointwise {
             input: a,
-            op: UnaryPointwiseOp::Relu,
+            op: UnaryPointwiseOp::Recip,
         }));
 
         let var = graph.new_var();

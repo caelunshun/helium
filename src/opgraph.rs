@@ -1,4 +1,7 @@
-use crate::{data_type::DataType, opgraph::op::Op};
+use crate::{
+    data_type::{DataType, DataVec},
+    opgraph::op::Op,
+};
 use slotmap::{SecondaryMap, SlotMap};
 
 pub mod op;
@@ -183,4 +186,51 @@ pub struct Input {
 pub struct Intermediate {
     pub descriptor: Descriptor,
     pub op: Op,
+}
+
+/// Maps VarId to their values.
+#[derive(Debug, Clone, Default)]
+pub struct VarMap(Vec<Option<Var>>);
+
+impl VarMap {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn insert(&mut self, var_id: VarId, value: Var) {
+        if var_id.0 as usize >= self.0.len() {
+            let needed_space = var_id.0 as usize - self.0.len() + 1;
+            self.0.resize(needed_space, None);
+        }
+
+        self.0[var_id.0 as usize] = Some(value);
+    }
+
+    pub fn get(&self, var_id: VarId) -> &Var {
+        self.0[var_id.0 as usize]
+            .as_ref()
+            .expect("missing variable value")
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum Var {
+    Scalar(f32),
+    Tensor(DataVec, Vec<usize>),
+}
+
+impl Var {
+    pub fn expect_scalar(&self) -> f32 {
+        match self {
+            Var::Scalar(x) => *x,
+            _ => panic!("not a scalar"),
+        }
+    }
+
+    pub fn expect_tensor(&self) -> (&DataVec, &[usize]) {
+        match self {
+            Var::Tensor(data, shape) => (data, shape),
+            _ => panic!("not a tensor"),
+        }
+    }
 }

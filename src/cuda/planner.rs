@@ -3,7 +3,7 @@ use crate::{
         context::CudaContext,
         error::CudaError,
         kernel::{pointwise, reduction},
-        plan::{Instr, MatmulInstr, Plan, Step},
+        plan::{Instr, MatmulInstr, Plan, Step, UploadTensorInstr},
     },
     opgraph::{
         op::{Op, Reduce},
@@ -104,6 +104,15 @@ impl<'a> Planner<'a> {
         };
 
         match &node.op {
+            Op::UploadTensor(op) => {
+                self.instr_graph
+                    .insert(Instr::UploadTensor(UploadTensorInstr {
+                        data_var: op.data_var,
+                        data_type: node.descriptor.data_type,
+                        output: node_id,
+                    }));
+                self.mark_covered(node_id);
+            }
             Op::Matmul(op) => {
                 self.instr_graph.insert(Instr::Matmul(MatmulInstr {
                     a_input: op.input_a,

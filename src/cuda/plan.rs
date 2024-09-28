@@ -1,7 +1,7 @@
 use crate::{
     cuda::{context::LoadedKernel, kernel::KernelParam},
     data_type::DataType,
-    opgraph::NodeId,
+    opgraph::{NodeId, VarId},
 };
 use cudarc::cublaslt::sys::cublasLtEpilogue_t;
 use std::sync::Arc;
@@ -53,10 +53,13 @@ impl Step {
 /// CUDA kernel or operation.
 #[derive(Debug, Clone)]
 pub enum Instr {
+    UploadTensor(UploadTensorInstr),
     /// Free the device memory owned by a node's output tensor.
     FreeTensor(NodeId),
     /// Execute a generated kernel.
-    PointwiseKernel { kernel: Arc<LoadedKernel> },
+    PointwiseKernel {
+        kernel: Arc<LoadedKernel>,
+    },
     ReductionKernel {
         kernel: Arc<LoadedKernel>,
         reduction_depth: u32,
@@ -85,6 +88,7 @@ impl Instr {
                 }
                 deps
             }
+            Instr::UploadTensor(_) => vec![],
         }
     }
 
@@ -95,8 +99,16 @@ impl Instr {
                 kernel.output_types.keys().copied().collect()
             }
             Instr::Matmul(config) => vec![config.output],
+            Instr::UploadTensor(instr) => vec![instr.output],
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct UploadTensorInstr {
+    pub data_var: VarId,
+    pub data_type: DataType,
+    pub output: NodeId,
 }
 
 #[derive(Debug, Clone)]

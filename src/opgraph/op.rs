@@ -1,10 +1,11 @@
 use crate::{
     data_type::DataType,
-    opgraph::{Descriptor, NodeId, VarId},
+    opgraph::{Descriptor, NodeId, VarId, VarMap},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Op {
+    UploadTensor(UploadTensor),
     Matmul(Matmul),
     Transpose(Transpose),
     UnaryPointwise(UnaryPointwise),
@@ -22,6 +23,7 @@ impl Op {
             Op::BinaryPointwise(op) => vec![op.lhs, op.rhs],
             Op::ChangeDataType(op) => vec![op.input],
             Op::Reduce(op) => vec![op.input],
+            Op::UploadTensor(_) => vec![],
         }
     }
 
@@ -34,6 +36,7 @@ impl Op {
                     | UnaryPointwiseOp::PowScalar(var),
                 ..
             }) => vec![*var],
+            Op::UploadTensor(op) => vec![op.data_var],
             _ => vec![],
         }
     }
@@ -58,10 +61,15 @@ impl Op {
                     data_type: DataType::F32,
                 }
             }
+            Op::UploadTensor(op) => op.descriptor,
         }
     }
 
-    pub fn output_shape<'a>(&self, get_input_shape: impl Fn(NodeId) -> Vec<usize>) -> Vec<usize> {
+    pub fn output_shape<'a>(
+        &self,
+        get_input_shape: impl Fn(NodeId) -> Vec<usize>,
+        vars: &VarMap,
+    ) -> Vec<usize> {
         match self {
             Op::Matmul(config) => {
                 let shape_a = get_input_shape(config.input_a);
@@ -86,11 +94,16 @@ impl Op {
 
                 shape
             }
+            Op::UploadTensor(op) => {
+                let (_, shape) = vars.get(op.data_var).expect_tensor();
+                shape.to_vec()
+            }
         }
     }
 
     pub fn kind(&self) -> OpKind {
         match self {
+            Op::UploadTensor(_) => OpKind::UploadTensor,
             Op::Matmul(_) => OpKind::Matmul,
             Op::Transpose(_) => OpKind::Tranpose,
             Op::Reduce(_) => OpKind::Reduce,
@@ -115,6 +128,7 @@ fn tranpose_shape(shape: &mut Vec<usize>) {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum OpKind {
+    UploadTensor,
     Matmul,
     Tranpose,
     Reduce,
@@ -150,6 +164,7 @@ pub enum UnaryPointwiseOp {
     AddScalar(VarId),
     MulScalar(VarId),
     PowScalar(VarId),
+    Recip,
     Neg,
     Exp,
     Sin,
@@ -203,4 +218,10 @@ pub enum ReduceOp {
     Mean,
     Max,
     Min,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct UploadTensor {
+    pub data_var: VarId,
+    pub descriptor: Descriptor,
 }

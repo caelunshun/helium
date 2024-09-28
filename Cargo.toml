@@ -18,7 +18,7 @@ thiserror = "1"
 thread_local = { version = "1", optional = true }
 
 [dependencies.cudarc]
-version = "0.11"
+version = "0.12"
 optional = true
 default-features = false
 features = [
@@ -30,11 +30,13 @@ features = [
     "curand",
     "cudnn",
     "nvrtc",
+    "nccl",
     "f16",
 ]
 
 [dev-dependencies]
 insta = "1"
+approx = "0.5"
 
 [features]
 default = ["cpu", "cuda"]

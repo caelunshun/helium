@@ -12,7 +12,7 @@ use cudarc::{
     cublaslt::sys::cublasLtHandle_t,
     driver,
     driver::{
-        sys::{CUmemPool_attribute, CUmemPool_attribute_enum, CUstream},
+        sys::{CUmemPool_attribute_enum, CUstream},
         CudaDevice,
     },
 };

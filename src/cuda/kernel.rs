@@ -92,7 +92,7 @@ pub enum KernelParam {
 
 /// Context for building kernel source code.
 #[derive(Default)]
-struct Context {
+pub struct Context {
     /// Maps variables in the opgraph (i.e. dynamic scalar inputs)
     /// to the C++ variable name storing their values.
     var_map: AHashMap<VarId, String>,

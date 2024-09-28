@@ -1,11 +1,15 @@
 use crate::{
-    cuda::{context::CudaStream, error::CudaError},
-    data_type::DataType,
+    cuda::{
+        context::{CudaContext, CudaStream},
+        error::CudaError,
+    },
+    data_type::{DataType, DataTypeConversion},
 };
 use cudarc::{
     driver,
     driver::{sys::CUdeviceptr, CudaDevice},
 };
+use half::{bf16, f16};
 use std::{mem, ptr, sync::Arc};
 
 /// Raw CUDA tensor.
@@ -57,6 +61,78 @@ impl RawTensor {
 
     pub fn into_data(self) -> Data {
         Arc::into_inner(self.data).unwrap()
+    }
+
+    pub fn from_slice_async<T: DataTypeConversion>(
+        slice: &[T],
+        data_type: DataType,
+        shape: impl Into<Vec<usize>>,
+        stream: &CudaStream,
+        device: &Arc<CudaDevice>,
+    ) -> Result<Self, CudaError> {
+        let shape = shape.into();
+        let len = shape.iter().copied().sum::<usize>();
+        let data = unsafe { Data::alloc_async(device, stream, data_type, len)? };
+        match data_type {
+            DataType::F16 => {
+                let vec: Vec<f16> = slice
+                    .iter()
+                    .copied()
+                    .map(|x| f16::from_f32(x.into_f32()))
+                    .collect();
+                unsafe {
+                    driver::result::memcpy_htod_async(data.ptr, &vec, stream.raw())?;
+                }
+            }
+            DataType::Bf16 => {
+                let vec: Vec<bf16> = slice
+                    .iter()
+                    .copied()
+                    .map(|x| bf16::from_f32(x.into_f32()))
+                    .collect();
+                unsafe {
+                    driver::result::memcpy_htod_async(data.ptr, &vec, stream.raw())?;
+                }
+            }
+            DataType::F32 => {
+                let vec: Vec<f32> = slice.iter().copied().map(T::into_f32).collect();
+                unsafe {
+                    driver::result::memcpy_htod_async(data.ptr, &vec, stream.raw())?;
+                }
+            }
+        };
+
+        Ok(Self::new(data, shape))
+    }
+
+    pub fn to_vec_async<T: DataTypeConversion>(
+        &self,
+        cx: &CudaContext,
+        stream: &CudaStream,
+    ) -> Result<Vec<T>, CudaError> {
+        match self.data_type() {
+            DataType::F16 => {
+                let mut buf = vec![f16::ZERO; self.num_elements()];
+                unsafe {
+                    driver::result::memcpy_dtoh_async(&mut buf, self.data.ptr, stream.raw())?;
+                }
+                Ok(buf.into_iter().map(|x| T::from_f32(x.into_f32())).collect())
+            }
+            DataType::Bf16 => {
+                let mut buf = vec![bf16::ZERO; self.num_elements()];
+                unsafe {
+                    driver::result::memcpy_dtoh_async(&mut buf, self.data.ptr, stream.raw())?;
+                }
+                Ok(buf.into_iter().map(|x| T::from_f32(x.into_f32())).collect())
+            }
+            DataType::F32 => {
+                let mut buf = vec![0.0f32; self.num_elements()];
+                unsafe {
+                    driver::result::memcpy_dtoh_async(&mut buf, self.data.ptr, stream.raw())?;
+                }
+                Ok(buf.into_iter().map(T::from_f32).collect())
+            }
+        }
     }
 }
 
