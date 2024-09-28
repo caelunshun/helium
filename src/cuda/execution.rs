@@ -105,6 +105,13 @@ pub fn execute_plan(
         bump.reset();
     }
 
+    // PERF: use more fine-grained synchronization here
+    for stream in streams {
+        unsafe {
+            driver::result::stream::synchronize(stream.raw())?;
+        }
+    }
+
     Ok(tensors)
 }
 

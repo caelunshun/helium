@@ -391,8 +391,6 @@ impl InstrGraph {
             plan.push_step(cleanup_step);
         }
 
-        dbg!(&plan);
-
         plan
     }
 }
