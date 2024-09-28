@@ -158,13 +158,14 @@ fn execute_instr(
             let output_shape = first_input.shape()
                 [..first_input.shape().len() - *reduction_depth as usize]
                 .to_vec();
-            let output_len = u32::try_from(output_shape.iter().copied().sum::<usize>()).unwrap();
+            let output_len =
+                u32::try_from(output_shape.iter().copied().product::<usize>()).unwrap();
 
             let reduction_stride = first_input.shape()
                 [first_input.shape().len() - *reduction_depth as usize..]
                 .iter()
                 .copied()
-                .sum::<usize>() as u32;
+                .product::<usize>() as u32;
 
             alloc_outputs(kernel, tensors, len, cx, stream, &shape)?;
 

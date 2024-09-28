@@ -2,6 +2,7 @@ use crate::{
     data_type::DataType,
     opgraph::{Descriptor, NodeId, VarId, VarMap},
 };
+use slotmap::SecondaryMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Op {
@@ -118,6 +119,32 @@ impl Op {
             self.kind(),
             OpKind::UnaryPointwise | OpKind::BinaryPointwise | OpKind::ChangeDataType
         )
+    }
+
+    pub fn apply_node_mapping(&mut self, mapping: &SecondaryMap<NodeId, NodeId>) {
+        match self {
+            Op::UploadTensor(_) => {}
+            Op::Matmul(op) => {
+                op.input_a = mapping[op.input_a];
+                op.input_b = mapping[op.input_b];
+            }
+            Op::Transpose(op) => {
+                op.input = mapping[op.input];
+            }
+            Op::UnaryPointwise(op) => {
+                op.input = mapping[op.input];
+            }
+            Op::BinaryPointwise(op) => {
+                op.lhs = mapping[op.lhs];
+                op.rhs = mapping[op.rhs];
+            }
+            Op::ChangeDataType(op) => {
+                op.input = mapping[op.input];
+            }
+            Op::Reduce(op) => {
+                op.input = mapping[op.input];
+            }
+        }
     }
 }
 

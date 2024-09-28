@@ -28,34 +28,65 @@ pub struct Tensor<const D: usize> {
 impl<const D: usize> Tensor<D> {
     pub fn from_vec<T: DataTypeConversion>(vec: Vec<T>, shape: [usize; D], device: Device) -> Self {
         assert_eq!(
-            shape.iter().copied().sum::<usize>(),
+            shape.iter().copied().product::<usize>(),
             vec.len(),
             "product of tensor dimensions must equal the length of the data"
         );
 
-        let mut builder = OpGraphBuilder::new(device);
-        let data_var = builder.op_graph.new_var();
+        let builder = Arc::new(Mutex::new(OpGraphBuilder::new(device)));
+        let inner = Arc::new(Mutex::new(TensorInner {
+            data: Data::Virtual(VirtualData {
+                graph: builder.clone(),
+                node: NodeId::null(),
+                shape: shape.to_vec(),
+                data_type: T::data_type(),
+            }),
+        }));
+
+        let mut builder = builder.lock();
+
+        let data_var = VarId::new();
         builder
             .vars
             .insert(data_var, Var::Tensor(T::into_data_vec(vec), shape.to_vec()));
-        let node = builder.op_graph.new_op(Op::UploadTensor(op::UploadTensor {
-            data_var,
-            descriptor: Descriptor {
-                dimension: D as u32,
-                data_type: T::data_type(),
-            },
-        }));
-
-        Self {
-            inner: Arc::new(Mutex::new(TensorInner {
-                data: Data::Virtual(VirtualData {
-                    graph: Arc::new(Mutex::new(builder)),
-                    node,
-                    shape: shape.to_vec(),
+        let node = builder.new_op(
+            Op::UploadTensor(op::UploadTensor {
+                data_var,
+                descriptor: Descriptor {
+                    dimension: D as u32,
                     data_type: T::data_type(),
-                }),
-            })),
-            device,
+                },
+            }),
+            &inner,
+        );
+
+        match &mut inner.lock().data {
+            Data::Virtual(data) => data.node = node,
+            _ => unreachable!(),
+        }
+
+        Self { inner, device }
+    }
+
+    pub fn from_slice<T: DataTypeConversion>(
+        slice: &[T],
+        shape: [usize; D],
+        device: Device,
+    ) -> Self {
+        Self::from_vec(slice.to_vec(), shape, device)
+    }
+
+    pub fn into_vec<T: DataTypeConversion>(self) -> Vec<T> {
+        self.make_concrete();
+        let inner = self.inner.lock();
+        let Data::Concrete(data) = &inner.data else {
+            unreachable!("make_concrete() was called")
+        };
+        match data {
+            #[cfg(feature = "cuda")]
+            ConcreteData::Cuda(tensor) => cuda::tensor_to_vec(tensor),
+            #[cfg(feature = "cpu")]
+            ConcreteData::Cpu => todo!(),
         }
     }
 
@@ -250,7 +281,7 @@ impl<const D: usize> Tensor<D> {
     fn create_scalar(&self, value: f32) -> VarId {
         let builder = self.make_graph().0;
         let mut builder = builder.lock();
-        let id = builder.op_graph.new_var();
+        let id = VarId::new();
         builder.vars.insert(id, Var::Scalar(value));
         id
     }
@@ -319,6 +350,7 @@ enum ConcreteData {
     #[cfg(feature = "cuda")]
     Cuda(crate::cuda::tensor::RawTensor),
     #[cfg(feature = "cpu")]
+    #[expect(unused)]
     Cpu,
 }
 
@@ -371,6 +403,10 @@ impl OpGraphBuilder {
             let new_input_id = node_mapping[old_input_id];
             other.inputs.insert(new_input_id, Arc::clone(tensor));
         }
+
+        for (var, value) in self.vars.drain() {
+            other.vars.insert(var, value);
+        }
     }
 
     pub fn new_input(
@@ -406,6 +442,8 @@ impl OpGraphBuilder {
         match &self.device {
             #[cfg(feature = "cuda")]
             Device::Cuda(device_index) => cuda::resolve(self, *device_index),
+            #[cfg(feature = "cpu")]
+            Device::Cpu => todo!(),
         }
     }
 }
@@ -444,5 +482,11 @@ mod cuda {
                     Data::Concrete(ConcreteData::Cuda(outputs.remove(node).unwrap()));
             }
         }
+    }
+
+    pub fn tensor_to_vec<T: DataTypeConversion>(tensor: &RawTensor) -> Vec<T> {
+        tensor
+            .to_vec_sync()
+            .expect("failed to transfer data to host")
     }
 }

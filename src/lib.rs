@@ -9,3 +9,6 @@ pub mod device;
 pub mod error;
 pub mod opgraph;
 pub mod tensor;
+
+#[doc(inline)]
+pub use self::{data_type::DataType, device::Device, tensor::Tensor};

@@ -1,8 +1,5 @@
 use crate::{
-    cuda::{
-        context::{CudaContext, CudaStream},
-        error::CudaError,
-    },
+    cuda::{context::CudaStream, error::CudaError},
     data_type::{DataType, DataTypeConversion},
 };
 use cudarc::{
@@ -44,7 +41,7 @@ impl RawTensor {
     }
 
     pub fn num_elements(&self) -> usize {
-        self.shape.iter().copied().sum()
+        self.shape.iter().copied().product()
     }
 
     pub fn data(&self) -> &Data {
@@ -71,7 +68,7 @@ impl RawTensor {
         device: &Arc<CudaDevice>,
     ) -> Result<Self, CudaError> {
         let shape = shape.into();
-        let len = shape.iter().copied().sum::<usize>();
+        let len = shape.iter().copied().product::<usize>();
         let data = unsafe { Data::alloc_async(device, stream, data_type, len)? };
         match data_type {
             DataType::F16 => {
@@ -105,30 +102,26 @@ impl RawTensor {
         Ok(Self::new(data, shape))
     }
 
-    pub fn to_vec_async<T: DataTypeConversion>(
-        &self,
-        cx: &CudaContext,
-        stream: &CudaStream,
-    ) -> Result<Vec<T>, CudaError> {
+    pub fn to_vec_sync<T: DataTypeConversion>(&self) -> Result<Vec<T>, CudaError> {
         match self.data_type() {
             DataType::F16 => {
                 let mut buf = vec![f16::ZERO; self.num_elements()];
                 unsafe {
-                    driver::result::memcpy_dtoh_async(&mut buf, self.data.ptr, stream.raw())?;
+                    driver::result::memcpy_dtoh_sync(&mut buf, self.data.ptr)?;
                 }
                 Ok(buf.into_iter().map(|x| T::from_f32(x.into_f32())).collect())
             }
             DataType::Bf16 => {
                 let mut buf = vec![bf16::ZERO; self.num_elements()];
                 unsafe {
-                    driver::result::memcpy_dtoh_async(&mut buf, self.data.ptr, stream.raw())?;
+                    driver::result::memcpy_dtoh_sync(&mut buf, self.data.ptr)?;
                 }
                 Ok(buf.into_iter().map(|x| T::from_f32(x.into_f32())).collect())
             }
             DataType::F32 => {
                 let mut buf = vec![0.0f32; self.num_elements()];
                 unsafe {
-                    driver::result::memcpy_dtoh_async(&mut buf, self.data.ptr, stream.raw())?;
+                    driver::result::memcpy_dtoh_sync(&mut buf, self.data.ptr)?;
                 }
                 Ok(buf.into_iter().map(T::from_f32).collect())
             }
@@ -137,7 +130,6 @@ impl RawTensor {
 }
 
 pub struct Data {
-    device: Arc<CudaDevice>,
     ptr: CUdeviceptr,
     typ: DataType,
 }
@@ -147,7 +139,7 @@ unsafe impl Sync for Data {}
 
 impl Data {
     pub unsafe fn alloc_async(
-        device: &Arc<CudaDevice>,
+        _device: &CudaDevice,
         stream: &CudaStream,
         data_type: DataType,
         len: usize,
@@ -155,7 +147,6 @@ impl Data {
         let num_bytes = len * data_type.size();
         let ptr = unsafe { driver::result::malloc_async(stream.raw(), num_bytes)? };
         Ok(Self {
-            device: Arc::clone(device),
             ptr,
             typ: data_type,
         })

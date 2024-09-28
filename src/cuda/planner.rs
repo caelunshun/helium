@@ -270,6 +270,7 @@ impl InstrGraph {
         Self::default()
     }
 
+    #[expect(unused)]
     pub fn get(&self, id: InstrId) -> &Instr {
         &self.instrs[id]
     }
@@ -389,6 +390,8 @@ impl InstrGraph {
             }
             plan.push_step(cleanup_step);
         }
+
+        dbg!(&plan);
 
         plan
     }

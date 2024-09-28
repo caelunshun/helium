@@ -202,7 +202,7 @@ mod tests {
                 UnaryPointwiseOp,
             },
             subgraph::OpSubgraph,
-            Descriptor, OpGraph,
+            Descriptor, OpGraph, VarId,
         },
     };
     use cudarc::driver::CudaDevice;
@@ -221,7 +221,7 @@ mod tests {
             dimension: 2,
         });
 
-        let var = graph.new_var();
+        let var = VarId::new();
 
         let a = graph.new_op(Op::UnaryPointwise(UnaryPointwise {
             input: input1,
@@ -240,13 +240,12 @@ mod tests {
         }));
         graph.new_output(out);
 
-        let out2 = graph.new_output(b);
+        let _out2 = graph.new_output(b);
 
         let subgraph = OpSubgraph::from_nodes(&Arc::new(graph), vec![a, b, out]);
 
         let kernel = generate_kernel(&subgraph);
         insta::assert_snapshot!(kernel.code);
-        insta::assert_debug_snapshot!(kernel.params);
 
         CompiledKernel::new(&kernel, &CudaDevice::new(0).unwrap()).unwrap();
     }

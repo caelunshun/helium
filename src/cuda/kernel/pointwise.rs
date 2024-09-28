@@ -239,7 +239,7 @@ mod tests {
         data_type::DataType,
         opgraph::{
             op::{BinaryPointwise, ChangeDataType, UnaryPointwise},
-            Descriptor, OpGraph,
+            Descriptor, OpGraph, VarId,
         },
     };
     use cudarc::driver::CudaDevice;
@@ -268,7 +268,7 @@ mod tests {
             op: UnaryPointwiseOp::Recip,
         }));
 
-        let var = graph.new_var();
+        let var = VarId::new();
         let e = graph.new_op(Op::UnaryPointwise(UnaryPointwise {
             input: d,
             op: UnaryPointwiseOp::PowScalar(var),
@@ -291,7 +291,6 @@ mod tests {
 
         let kernel = generate_kernel(&subgraph);
         insta::assert_snapshot!(kernel.code);
-        insta::assert_debug_snapshot!(kernel.params);
 
         CompiledKernel::new(&kernel, &CudaDevice::new(0).unwrap()).unwrap();
     }

@@ -2,7 +2,9 @@ use crate::{
     data_type::{DataType, DataVec},
     opgraph::op::Op,
 };
+use ahash::AHashMap;
 use slotmap::{SecondaryMap, SlotMap};
+use std::sync::atomic::AtomicU64;
 
 pub mod op;
 pub mod subgraph;
@@ -14,11 +16,17 @@ pub struct OpGraph {
     inputs: Vec<NodeId>,
     outbound_edges: SecondaryMap<NodeId, Vec<NodeId>>,
     inbound_edges: SecondaryMap<NodeId, Vec<NodeId>>,
-    num_vars: u32,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub struct VarId(u32);
+pub struct VarId(u64);
+
+impl VarId {
+    pub fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        VarId(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
+}
 
 impl OpGraph {
     pub fn new() -> Self {
@@ -30,6 +38,9 @@ impl OpGraph {
 
         for (node_id, node) in &self.nodes {
             let new_node_id = other.nodes.insert(node.clone());
+            if let Node::Intermediate(op) = &mut other.nodes[new_node_id] {
+                op.op.apply_node_mapping(&id_mapping);
+            }
 
             id_mapping.insert(node_id, new_node_id);
         }
@@ -126,20 +137,6 @@ impl OpGraph {
     pub fn is_input(&self, id: NodeId) -> bool {
         self.inputs.contains(&id)
     }
-
-    pub fn num_vars(&self) -> u32 {
-        self.num_vars
-    }
-
-    pub fn vars(&self) -> impl Iterator<Item = VarId> + '_ {
-        (0..self.num_vars).map(VarId)
-    }
-
-    pub fn new_var(&mut self) -> VarId {
-        let id = VarId(self.num_vars);
-        self.num_vars += 1;
-        id
-    }
 }
 
 fn push_if_absent<T: Eq>(vec: &mut Vec<T>, val: T) {
@@ -190,7 +187,7 @@ pub struct Intermediate {
 
 /// Maps VarId to their values.
 #[derive(Debug, Clone, Default)]
-pub struct VarMap(Vec<Option<Var>>);
+pub struct VarMap(AHashMap<VarId, Var>);
 
 impl VarMap {
     pub fn new() -> Self {
@@ -198,18 +195,15 @@ impl VarMap {
     }
 
     pub fn insert(&mut self, var_id: VarId, value: Var) {
-        if var_id.0 as usize >= self.0.len() {
-            let needed_space = var_id.0 as usize - self.0.len() + 1;
-            self.0.resize(needed_space, None);
-        }
-
-        self.0[var_id.0 as usize] = Some(value);
+        self.0.insert(var_id, value);
     }
 
     pub fn get(&self, var_id: VarId) -> &Var {
-        self.0[var_id.0 as usize]
-            .as_ref()
-            .expect("missing variable value")
+        &self.0[&var_id]
+    }
+
+    pub fn drain(&mut self) -> impl Iterator<Item = (VarId, Var)> + '_ {
+        self.0.drain()
     }
 }
 

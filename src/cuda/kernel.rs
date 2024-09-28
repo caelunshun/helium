@@ -131,6 +131,7 @@ impl Context {
         &self.var_map[&id]
     }
 
+    #[expect(unused)]
     pub fn input(&self, id: NodeId) -> &str {
         &self.input_map[&id]
     }
