@@ -124,6 +124,12 @@ impl<const D: usize> Tensor<D> {
 
     /// Column-major matrix multiplication.
     pub fn matmul(self, rhs: Self) -> Self {
+        const {
+            if D < 2 {
+                panic!("matrix multiplication requires tensors of dimension >= 2");
+            }
+        }
+
         let shape_lhs = self.shape();
         let shape_rhs = rhs.shape();
 
@@ -142,6 +148,14 @@ impl<const D: usize> Tensor<D> {
             rhs.data_type(),
             "matmul only supported when A and B have the same data type"
         );
+
+        if D > 2 {
+            assert_eq!(
+                &self.shape()[..D - 2],
+                &rhs.shape()[..D - 2],
+                "for batched matmul, all batch dimensions must have the same size"
+            );
+        }
 
         let (graph, lhs) = self.make_graph();
         let rhs = rhs.to_graph(&graph);

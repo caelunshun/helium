@@ -18,6 +18,9 @@ use cudarc::{
         cublasLtMatmulDescAttributes_t::{
             CUBLASLT_MATMUL_DESC_EPILOGUE, CUBLASLT_MATMUL_DESC_TRANSA, CUBLASLT_MATMUL_DESC_TRANSB,
         },
+        cublasLtMatrixLayoutAttribute_t::{
+            CUBLASLT_MATRIX_LAYOUT_BATCH_COUNT, CUBLASLT_MATRIX_LAYOUT_STRIDED_BATCH_OFFSET,
+        },
         cudaDataType::CUDA_R_32F,
         cudaDataType_t::CUDA_R_16F,
     },
@@ -262,7 +265,6 @@ fn execute_instr(
 
             let out_rows = a_input.dim_at(-1) as u64;
             let out_cols = b_input.dim_at(-2) as u64;
-            let out_len = out_rows * out_cols;
 
             let d_layout = cublaslt::create_matrix_layout(
                 cuda_data_type(config.output_type),
@@ -283,15 +285,55 @@ fn execute_instr(
                 None => d_layout,
             };
 
-            // TODO: batched matmul support
-            assert_eq!(a_input.shape().len(), 2);
-            assert_eq!(b_input.shape().len(), 2);
+            let batch_size = if a_input.shape().len() > 2 {
+                // Batched matmul.
+                let batch_size = a_input.shape()[..a_input.shape().len() - 2]
+                    .iter()
+                    .copied()
+                    .product::<usize>();
+                let batch_size = u32::try_from(batch_size).unwrap();
+
+                let stride_a = (a_input.dim_at(-1) * a_input.dim_at(-2)) as u64;
+                let stride_b = (b_input.dim_at(-1) * b_input.dim_at(-2)) as u64;
+                let stride_d = (out_cols * out_rows) as u64;
+
+                unsafe {
+                    // Note: C and D always have the same shape, so use stride_d for c_layout
+                    for (mat, stride) in [
+                        (a_layout, stride_a),
+                        (b_layout, stride_b),
+                        (c_layout, stride_d),
+                        (d_layout, stride_d),
+                    ] {
+                        cublaslt::set_matrix_layout_attribute(
+                            mat,
+                            CUBLASLT_MATRIX_LAYOUT_BATCH_COUNT,
+                            &batch_size as *const u32 as *const _,
+                            mem::size_of::<u32>(),
+                        )?;
+                        cublaslt::set_matrix_layout_attribute(
+                            mat,
+                            CUBLASLT_MATRIX_LAYOUT_STRIDED_BATCH_OFFSET,
+                            &stride as *const u64 as *const _,
+                            mem::size_of::<u64>(),
+                        )?
+                    }
+                }
+                batch_size
+            } else {
+                1
+            };
+
+            let out_len = out_rows * out_cols * batch_size as u64;
+
+            let mut out_shape = a_input.shape()[..a_input.shape().len() - 2].to_vec();
+            out_shape.extend([out_cols as usize, out_rows as usize]);
 
             let mut output_tensor = RawTensor::new(
                 unsafe {
                     Data::alloc_async(cx.device(), stream, config.output_type, out_len as usize)?
                 },
-                vec![out_cols as usize, out_rows as usize],
+                out_shape,
             );
 
             let alpha = if scale_type == CUDA_R_16F {

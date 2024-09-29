@@ -202,3 +202,65 @@ fn matmul_large_matrices() {
 
     assert_ulps_eq!(result.as_slice(), &[50.0f32; 10000][..], epsilon = 1e-3);
 }
+
+#[test]
+fn matmul_batched() {
+    let a = Tensor::<3>::from_array(
+        [
+            // first batch
+            [
+                [
+                    bf16::from_f32(1.0),
+                    bf16::from_f32(2.0),
+                    bf16::from_f32(3.0),
+                ],
+                [
+                    bf16::from_f32(4.0),
+                    bf16::from_f32(5.0),
+                    bf16::from_f32(6.0),
+                ],
+            ],
+            // second batch
+            [
+                [
+                    bf16::from_f32(7.0),
+                    bf16::from_f32(8.0),
+                    bf16::from_f32(9.0),
+                ],
+                [
+                    bf16::from_f32(10.0),
+                    bf16::from_f32(11.0),
+                    bf16::from_f32(12.0),
+                ],
+            ],
+        ],
+        DEVICE,
+    );
+
+    let b = Tensor::<3>::from_array(
+        [
+            // first batch
+            [
+                [bf16::from_f32(1.0), bf16::from_f32(2.0)],
+                [bf16::from_f32(3.0), bf16::from_f32(4.0)],
+                [bf16::from_f32(5.0), bf16::from_f32(6.0)],
+            ],
+            // second batch
+            [
+                [bf16::from_f32(7.0), bf16::from_f32(8.0)],
+                [bf16::from_f32(9.0), bf16::from_f32(10.0)],
+                [bf16::from_f32(11.0), bf16::from_f32(12.0)],
+            ],
+        ],
+        DEVICE,
+    );
+
+    let result = a.matmul(b).into_vec::<f32>();
+
+    let expected = vec![
+        9.0, 12.0, 15.0, 19.0, 26.0, 33.0, 29.0, 40.0, 51.0, // first batch
+        129.0, 144.0, 159.0, 163.0, 182.0, 201.0, 197.0, 220.0, 243.0, // second batch
+    ];
+
+    assert_ulps_eq!(result.as_slice(), expected.as_slice(), epsilon = 1e-2);
+}
