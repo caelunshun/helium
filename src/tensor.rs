@@ -105,6 +105,10 @@ impl<const D: usize> Tensor<D> {
         vec[0]
     }
 
+    pub fn device(&self) -> Device {
+        self.device
+    }
+
     pub fn shape(&self) -> [usize; D] {
         self.inner
             .lock()
@@ -166,6 +170,11 @@ impl<const D: usize> Tensor<D> {
                 input_b: rhs,
             }),
         )
+    }
+
+    pub fn pow_scalar(self, power: f32) -> Self {
+        let var = self.create_scalar(power);
+        self.op_unary_pointwise(UnaryPointwiseOp::PowScalar(var))
     }
 
     /// Performs sum reduction along the last `depth` dimensions
@@ -651,8 +660,9 @@ mod cuda {
 
         for (node, tensor) in &graph.node_to_tensor {
             if let Some(tensor) = tensor.upgrade() {
-                tensor.lock().data =
-                    Data::Concrete(ConcreteData::Cuda(outputs.remove(node).unwrap()));
+                if let Some(val) = outputs.remove(node) {
+                    tensor.lock().data = Data::Concrete(ConcreteData::Cuda(val));
+                }
             }
         }
     }

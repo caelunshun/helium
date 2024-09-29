@@ -63,6 +63,10 @@ impl RawTensor {
     }
 
     pub fn dim_at(&self, x: i32) -> usize {
+        if x >= self.shape.len() as i32 || (-x) > self.shape.len() as i32 {
+            return 1;
+        }
+
         if x < 0 {
             self.shape[self.shape.len() - x.abs() as usize]
         } else {
