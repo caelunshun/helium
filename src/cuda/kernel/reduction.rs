@@ -151,7 +151,7 @@ pub fn generate_kernel(subgraph: &OpSubgraph) -> Kernel {
             
             float val = {init_val};
             if (indexInGroup < stride) {{
-                uint32_t index = indexInGroup;
+                uint32_t index = group * stride + indexInGroup;
                 {pointwise_code}
                 val = {input_ident};
             }}

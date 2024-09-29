@@ -152,6 +152,7 @@ fn execute_instr(
         Instr::ReductionKernel {
             kernel,
             reduction_depth,
+            initial_reduced_value,
         } => {
             let func = cx
                 .device()
@@ -176,12 +177,14 @@ fn execute_instr(
 
             alloc_outputs(kernel, tensors, len, cx, stream, &shape)?;
 
-            let reduction_output_tensor = RawTensor::new(
+            let mut reduction_output_tensor = RawTensor::new(
                 unsafe {
                     Data::alloc_async(cx.device(), stream, DataType::F32, output_len as usize)?
                 },
                 output_shape,
             );
+            reduction_output_tensor.fill(*initial_reduced_value, stream)?;
+
             tensors.insert(kernel.reduction_output.unwrap(), reduction_output_tensor);
 
             let mut params = build_params(

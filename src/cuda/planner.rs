@@ -137,7 +137,12 @@ impl<'a> Planner<'a> {
                             reduction::generate_kernel(&subgraph)
                         })?;
                         let Node::Intermediate(Intermediate {
-                            op: Op::Reduce(Reduce { depth, .. }),
+                            op:
+                                Op::Reduce(Reduce {
+                                    depth,
+                                    op: reduce_op,
+                                    ..
+                                }),
                             ..
                         }) = self.graph.get(reduction_node_id)
                         else {
@@ -147,6 +152,7 @@ impl<'a> Planner<'a> {
                         Instr::ReductionKernel {
                             kernel,
                             reduction_depth: *depth,
+                            initial_reduced_value: reduce_op.default_value(),
                         }
                     }
                     None => {
@@ -168,6 +174,7 @@ impl<'a> Planner<'a> {
                 self.instr_graph.insert(Instr::ReductionKernel {
                     kernel,
                     reduction_depth: op.depth,
+                    initial_reduced_value: op.op.default_value(),
                 });
                 self.mark_covered(node_id);
             }

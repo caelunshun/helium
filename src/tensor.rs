@@ -3,7 +3,10 @@ use crate::{
     device::Device,
     opgraph::{
         op,
-        op::{BinaryPointwise, BinaryPointwiseOp, Op, UnaryPointwise, UnaryPointwiseOp},
+        op::{
+            BinaryPointwise, BinaryPointwiseOp, Op, Reduce, ReduceOp, UnaryPointwise,
+            UnaryPointwiseOp,
+        },
         Descriptor, NodeId, OpGraph, Var, VarId, VarMap,
     },
 };
@@ -90,8 +93,16 @@ impl<const D: usize> Tensor<D> {
         }
     }
 
-    pub fn recip(self) -> Self {
-        self.op_unary_pointwise(UnaryPointwiseOp::Recip)
+    /// # Panics
+    /// Panics if the tensor does not have a length of exactly 1.
+    pub fn into_scalar<T: DataTypeConversion>(self) -> T {
+        let vec = self.into_vec::<T>();
+        assert_eq!(
+            vec.len(),
+            1,
+            "Tensor::into_scalar called on tensor of length != 1"
+        );
+        vec[0]
     }
 
     pub fn shape(&self) -> [usize; D] {
@@ -101,6 +112,38 @@ impl<const D: usize> Tensor<D> {
             .shape()
             .try_into()
             .expect("dimension does not match D const parameter?")
+    }
+
+    pub fn recip(self) -> Self {
+        self.op_unary_pointwise(UnaryPointwiseOp::Recip)
+    }
+
+    /// Performs sum reduction along the last `depth` dimensions
+    /// of the tensor. The last `depth` dimensions are replaced
+    /// with a single dimension of length 1.
+    pub fn reduce_sum<const D2: usize>(self, depth: u32) -> Tensor<D2> {
+        self.op_reduce(ReduceOp::Sum, depth)
+    }
+
+    /// Performs mean reduction along the last `depth` dimensions
+    /// of the tensor. The last `depth` dimensions are replaced
+    /// with a single dimension of length 1.
+    pub fn reduce_mean<const D2: usize>(self, depth: u32) -> Tensor<D2> {
+        self.op_reduce(ReduceOp::Mean, depth)
+    }
+
+    /// Performs min reduction along the last `depth` dimensions
+    /// of the tensor. The last `depth` dimensions are replaced
+    /// with a single dimension of length 1.
+    pub fn reduce_min<const D2: usize>(self, depth: u32) -> Tensor<D2> {
+        self.op_reduce(ReduceOp::Min, depth)
+    }
+
+    /// Performs max reduction along the last `depth` dimensions
+    /// of the tensor. The last `depth` dimensions are replaced
+    /// with a single dimension of length 1.
+    pub fn reduce_max<const D2: usize>(self, depth: u32) -> Tensor<D2> {
+        self.op_reduce(ReduceOp::Max, depth)
     }
 }
 
@@ -276,6 +319,24 @@ impl<const D: usize> Tensor<D> {
     fn op_unary_pointwise(&self, op: UnaryPointwiseOp) -> Self {
         let (cx, this) = self.make_graph();
         Tensor::from_op(&cx, Op::UnaryPointwise(UnaryPointwise { input: this, op }))
+    }
+
+    fn op_reduce<const D2: usize>(&self, op: ReduceOp, depth: u32) -> Tensor<D2> {
+        assert_eq!(
+            D2,
+            D - depth as usize + 1,
+            "result tensor dimensions do not match reduction depth"
+        );
+
+        let (cx, this) = self.make_graph();
+        Tensor::from_op(
+            &cx,
+            Op::Reduce(Reduce {
+                input: this,
+                op,
+                depth,
+            }),
+        )
     }
 
     fn create_scalar(&self, value: f32) -> VarId {

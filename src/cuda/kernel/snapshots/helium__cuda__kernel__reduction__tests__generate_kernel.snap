@@ -36,7 +36,7 @@ extern "C" __global__ void generatedReductionKernel(half *ident0, nv_bfloat16 *i
     
     float val = 0.0;
     if (indexInGroup < stride) {
-        uint32_t index = indexInGroup;
+        uint32_t index = group * stride + indexInGroup;
         float ident1 = ident0[index];
 float ident3 = ident2[index];
 float ident5 = ident1 * ident4;

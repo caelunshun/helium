@@ -58,7 +58,7 @@ impl Op {
             Op::Reduce(Reduce { input, depth, .. }) => {
                 let input = get_input_descriptor(*input);
                 Descriptor {
-                    dimension: (input.dimension - *depth).max(1),
+                    dimension: input.dimension - *depth + 1,
                     data_type: DataType::F32,
                 }
             }
@@ -245,6 +245,17 @@ pub enum ReduceOp {
     Mean,
     Max,
     Min,
+}
+
+impl ReduceOp {
+    pub fn default_value(self) -> f32 {
+        match self {
+            ReduceOp::Sum => 0.0,
+            ReduceOp::Mean => 0.0,
+            ReduceOp::Max => f32::NEG_INFINITY,
+            ReduceOp::Min => f32::INFINITY,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

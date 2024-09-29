@@ -24,6 +24,18 @@ impl RawTensor {
         }
     }
 
+    pub fn fill(&mut self, val: f32, stream: &CudaStream) -> Result<(), CudaError> {
+        unsafe {
+            driver::sys::lib().cuMemsetD32Async(
+                self.data.ptr,
+                val.to_bits(),
+                self.num_elements(),
+                stream.raw(),
+            );
+        }
+        Ok(())
+    }
+
     pub fn dimension(&self) -> u32 {
         self.shape.len() as u32
     }

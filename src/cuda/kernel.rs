@@ -32,6 +32,7 @@ pub struct CompiledKernel {
 
 impl CompiledKernel {
     pub fn new(kernel: &Kernel, device: &CudaDevice) -> Result<Self, CudaError> {
+        println!("{}", kernel.code);
         let compute_major = unsafe {
             device::get_attribute(
                 *device.cu_device(),

@@ -63,6 +63,7 @@ pub enum Instr {
     ReductionKernel {
         kernel: Arc<LoadedKernel>,
         reduction_depth: u32,
+        initial_reduced_value: f32,
     },
     /// Execute a matmul with cublasLT.
     Matmul(MatmulInstr),
