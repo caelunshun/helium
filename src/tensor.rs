@@ -114,8 +114,44 @@ impl<const D: usize> Tensor<D> {
             .expect("dimension does not match D const parameter?")
     }
 
+    pub fn data_type(&self) -> DataType {
+        self.inner.lock().data_type()
+    }
+
     pub fn recip(self) -> Self {
         self.op_unary_pointwise(UnaryPointwiseOp::Recip)
+    }
+
+    /// Column-major matrix multiplication.
+    pub fn matmul(self, rhs: Self) -> Self {
+        let shape_lhs = self.shape();
+        let shape_rhs = rhs.shape();
+
+        assert_eq!(
+            shape_lhs[D - 2],
+            shape_rhs[D - 1],
+            "invalid dimensions for matmul: {}x{} (lhs) is not compatible with {}x{} (rhs)",
+            shape_lhs[D - 1],
+            shape_lhs[D - 2],
+            shape_rhs[D - 1],
+            shape_rhs[D - 2],
+        );
+
+        assert_eq!(
+            self.data_type(),
+            rhs.data_type(),
+            "matmul only supported when A and B have the same data type"
+        );
+
+        let (graph, lhs) = self.make_graph();
+        let rhs = rhs.to_graph(&graph);
+        Self::from_op(
+            &graph,
+            Op::Matmul(op::Matmul {
+                input_a: lhs,
+                input_b: rhs,
+            }),
+        )
     }
 
     /// Performs sum reduction along the last `depth` dimensions
@@ -144,6 +180,65 @@ impl<const D: usize> Tensor<D> {
     /// with a single dimension of length 1.
     pub fn reduce_max<const D2: usize>(self, depth: u32) -> Tensor<D2> {
         self.op_reduce(ReduceOp::Max, depth)
+    }
+}
+
+impl Tensor<1> {
+    pub fn from_scalar<T: DataTypeConversion>(x: T, device: Device) -> Self {
+        Self::from_vec(vec![x], [1], device)
+    }
+
+    pub fn from_array<T: DataTypeConversion, const N: usize>(arr: [T; N], device: Device) -> Self {
+        Self::from_vec(arr.to_vec(), [N], device)
+    }
+}
+
+impl Tensor<2> {
+    pub fn from_array<T: DataTypeConversion, const N1: usize, const N2: usize>(
+        arr: [[T; N2]; N1],
+        device: Device,
+    ) -> Self {
+        Self::from_vec(
+            arr.into_iter().flatten().collect::<Vec<T>>(),
+            [N1, N2],
+            device,
+        )
+    }
+}
+
+impl Tensor<3> {
+    pub fn from_array<T: DataTypeConversion, const N1: usize, const N2: usize, const N3: usize>(
+        arr: [[[T; N3]; N2]; N1],
+        device: Device,
+    ) -> Self {
+        Self::from_vec(
+            arr.into_iter().flatten().flatten().collect::<Vec<T>>(),
+            [N1, N2, N3],
+            device,
+        )
+    }
+}
+
+impl Tensor<4> {
+    pub fn from_array<
+        T: DataTypeConversion,
+        const N1: usize,
+        const N2: usize,
+        const N3: usize,
+        const N4: usize,
+    >(
+        arr: [[[[T; N4]; N3]; N2]; N1],
+        device: Device,
+    ) -> Self {
+        Self::from_vec(
+            arr.into_iter()
+                .flatten()
+                .flatten()
+                .flatten()
+                .collect::<Vec<T>>(),
+            [N1, N2, N3, N4],
+            device,
+        )
     }
 }
 
@@ -457,6 +552,9 @@ impl OpGraphBuilder {
                     virt.graph = Arc::clone(other_handle);
                     virt.node = new_node_id;
                 }
+                other
+                    .node_to_tensor
+                    .insert(new_node_id, Arc::downgrade(&tensor));
             }
         }
 

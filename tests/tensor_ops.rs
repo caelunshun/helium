@@ -1,5 +1,5 @@
 use approx::assert_ulps_eq;
-use half::bf16;
+use half::{bf16, f16};
 use helium::{Device, Tensor};
 
 const DEVICE: Device = Device::Cuda(0);
@@ -128,4 +128,77 @@ fn reduce_min() {
 
     assert_ulps_eq!(min_all.into_scalar::<f32>(), 1.0);
     assert_ulps_eq!(min_dim1.into_vec::<f32>().as_slice(), &[1.0, 5.0, 9.0][..]);
+}
+
+#[test]
+fn matmul_simple() {
+    let a = Tensor::<2>::from_array([[2.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.0, 0.0, 2.0]], DEVICE);
+    let b = Tensor::<2>::from_array([[1.0, 2.0, 3.0], [2.0, 4.0, 6.0]], DEVICE);
+
+    let result = a.matmul(b).into_vec::<f32>();
+
+    assert_ulps_eq!(result.as_slice(), &[2.0, 4.0, 6.0, 4.0, 8.0, 12.0][..]);
+}
+
+#[test]
+fn matmul_bf16() {
+    let a = Tensor::<2>::from_array(
+        [
+            [bf16::from_f32(1.0), bf16::from_f32(2.0)],
+            [bf16::from_f32(3.0), bf16::from_f32(4.0)],
+        ],
+        DEVICE,
+    );
+    let b = Tensor::<2>::from_array(
+        [
+            [bf16::from_f32(1.0), bf16::from_f32(2.0)],
+            [bf16::from_f32(3.0), bf16::from_f32(4.0)],
+        ],
+        DEVICE,
+    );
+
+    let result = a.matmul(b).into_vec::<f32>();
+
+    assert_ulps_eq!(
+        result.as_slice(),
+        &[7.0, 10.0, 15.0, 22.0][..],
+        epsilon = 1e-3
+    );
+}
+
+#[test]
+fn matmul_f16() {
+    let a = Tensor::<2>::from_array(
+        [
+            [f16::from_f32(1.0), f16::from_f32(2.0), f16::from_f32(3.0)],
+            [f16::from_f32(4.0), f16::from_f32(5.0), f16::from_f32(6.0)],
+        ],
+        DEVICE,
+    );
+    let b = Tensor::<2>::from_array(
+        [
+            [f16::from_f32(1.0), f16::from_f32(2.0)],
+            [f16::from_f32(3.0), f16::from_f32(4.0)],
+            [f16::from_f32(5.0), f16::from_f32(6.0)],
+        ],
+        DEVICE,
+    );
+
+    let result = a.matmul(b).into_vec::<f32>();
+
+    assert_ulps_eq!(
+        result.as_slice(),
+        &[9.0, 12.0, 15.0, 19.0, 26.0, 33.0, 29.0, 40.0, 51.0][..],
+        epsilon = 1e-3
+    );
+}
+
+#[test]
+fn matmul_large_matrices() {
+    let a = Tensor::<2>::from_vec(vec![1.0f32; 10000], [100, 100], DEVICE);
+    let b = Tensor::<2>::from_vec(vec![0.5f32; 10000], [100, 100], DEVICE);
+
+    let result = a.matmul(b).into_vec::<f32>();
+
+    assert_ulps_eq!(result.as_slice(), &[50.0f32; 10000][..], epsilon = 1e-3);
 }

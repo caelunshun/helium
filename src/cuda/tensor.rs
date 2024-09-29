@@ -25,13 +25,31 @@ impl RawTensor {
     }
 
     pub fn fill(&mut self, val: f32, stream: &CudaStream) -> Result<(), CudaError> {
-        unsafe {
-            driver::sys::lib().cuMemsetD32Async(
-                self.data.ptr,
-                val.to_bits(),
-                self.num_elements(),
-                stream.raw(),
-            );
+        match self.data_type() {
+            DataType::F32 => unsafe {
+                driver::sys::lib().cuMemsetD32Async(
+                    self.data.ptr,
+                    val.to_bits(),
+                    self.num_elements(),
+                    stream.raw(),
+                );
+            },
+            DataType::Bf16 => unsafe {
+                driver::sys::lib().cuMemsetD16Async(
+                    self.data.ptr,
+                    bf16::from_f32(val).to_bits(),
+                    self.num_elements(),
+                    stream.raw(),
+                );
+            },
+            DataType::F16 => unsafe {
+                driver::sys::lib().cuMemsetD16Async(
+                    self.data.ptr,
+                    f16::from_f32(val).to_bits(),
+                    self.num_elements(),
+                    stream.raw(),
+                );
+            },
         }
         Ok(())
     }

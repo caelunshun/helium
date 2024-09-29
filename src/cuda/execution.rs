@@ -260,6 +260,17 @@ fn execute_instr(
                 b_input.dim_at(-1) as i64,
             )?;
 
+            let out_rows = a_input.dim_at(-1) as u64;
+            let out_cols = b_input.dim_at(-2) as u64;
+            let out_len = out_rows * out_cols;
+
+            let d_layout = cublaslt::create_matrix_layout(
+                cuda_data_type(config.output_type),
+                out_rows,
+                out_cols,
+                out_rows as i64,
+            )?;
+
             let c_layout = match bias_input {
                 Some(bias) => {
                     cublaslt::create_matrix_layout(
@@ -269,19 +280,8 @@ fn execute_instr(
                         0, // column broadcast
                     )?
                 }
-                None => ptr::null_mut(),
+                None => d_layout,
             };
-
-            let out_rows = a_input.dim_at(-1) as u64;
-            let out_cols = a_input.dim_at(-2) as u64;
-            let out_len = out_rows * out_cols;
-
-            let d_layout = cublaslt::create_matrix_layout(
-                cuda_data_type(config.output_type),
-                out_rows,
-                out_cols,
-                out_rows as i64,
-            )?;
 
             // TODO: batched matmul support
             assert_eq!(a_input.shape().len(), 2);
@@ -320,7 +320,7 @@ fn execute_instr(
                     a_layout,
                     b_input.data().device_ptr().cast(),
                     b_layout,
-                    bias_input.map_or(ptr::null(), |tensor| tensor.data().device_ptr().cast()),
+                    bias_input.map_or(ptr::null(), |t| t.data().device_ptr().cast()),
                     c_layout,
                     output_tensor.data_mut().device_ptr_mut().cast(),
                     d_layout,

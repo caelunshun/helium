@@ -66,7 +66,7 @@ impl Op {
         }
     }
 
-    pub fn output_shape<'a>(
+    pub fn output_shape(
         &self,
         get_input_shape: impl Fn(NodeId) -> Vec<usize>,
         vars: &VarMap,
