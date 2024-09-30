@@ -98,6 +98,8 @@ impl<'a> Planner<'a> {
         let node = match node {
             Node::Intermediate(int) => int,
             Node::Output(_) => {
+                let prev = self.graph.inbound_edges(node_id)[0];
+                self.instr_graph.outputs.push(prev);
                 return Ok(());
             }
             Node::Input(_) => unreachable!(),
@@ -270,6 +272,7 @@ struct InstrGraph {
     inbound_edges: SecondaryMap<InstrId, Vec<InstrId>>,
     outbound_edges: SecondaryMap<InstrId, Vec<InstrId>>,
     optimized_node_dependents: SecondaryMap<NodeId, Vec<InstrId>>,
+    outputs: Vec<NodeId>,
 }
 
 impl InstrGraph {
@@ -383,7 +386,7 @@ impl InstrGraph {
                 for node in self.instrs[instr].dependencies() {
                     let outdegree = &mut outdegrees[node];
                     *outdegree = outdegree.checked_sub(1).unwrap();
-                    if *outdegree == 0 {
+                    if *outdegree == 0 && !self.outputs.contains(&node) {
                         free_tensors.push(node);
                     }
                 }

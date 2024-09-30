@@ -173,8 +173,7 @@ impl<const D: usize> Tensor<D> {
     }
 
     pub fn pow_scalar(self, power: f32) -> Self {
-        let var = self.create_scalar(power);
-        self.op_unary_pointwise(UnaryPointwiseOp::PowScalar(var))
+        self.op_unary_pointwise_scalar(UnaryPointwiseOp::PowScalar, power)
     }
 
     /// Performs sum reduction along the last `depth` dimensions
@@ -285,7 +284,7 @@ impl<const D: usize> Add<f32> for Tensor<D> {
     type Output = Tensor<D>;
 
     fn add(self, rhs: f32) -> Self::Output {
-        self.op_unary_pointwise(UnaryPointwiseOp::AddScalar(self.create_scalar(rhs)))
+        self.op_unary_pointwise_scalar(UnaryPointwiseOp::AddScalar, rhs)
     }
 }
 
@@ -316,7 +315,7 @@ impl<const D: usize> Mul<f32> for Tensor<D> {
     type Output = Tensor<D>;
 
     fn mul(self, rhs: f32) -> Self::Output {
-        self.op_unary_pointwise(UnaryPointwiseOp::MulScalar(self.create_scalar(rhs)))
+        self.op_unary_pointwise_scalar(UnaryPointwiseOp::MulScalar, rhs)
     }
 }
 
@@ -439,6 +438,23 @@ impl<const D: usize> Tensor<D> {
         Tensor::from_op(&cx, Op::UnaryPointwise(UnaryPointwise { input: this, op }))
     }
 
+    fn op_unary_pointwise_scalar(
+        &self,
+        op: impl Fn(VarId) -> UnaryPointwiseOp,
+        value: f32,
+    ) -> Self {
+        let (cx, this) = self.make_graph();
+        let var = VarId::new();
+        cx.lock().vars.insert(var, Var::Scalar(value));
+        Tensor::from_op(
+            &cx,
+            Op::UnaryPointwise(UnaryPointwise {
+                input: this,
+                op: op(var),
+            }),
+        )
+    }
+
     fn op_reduce<const D2: usize>(&self, op: ReduceOp, depth: u32) -> Tensor<D2> {
         assert_eq!(
             D2,
@@ -455,14 +471,6 @@ impl<const D: usize> Tensor<D> {
                 depth,
             }),
         )
-    }
-
-    fn create_scalar(&self, value: f32) -> VarId {
-        let builder = self.make_graph().0;
-        let mut builder = builder.lock();
-        let id = VarId::new();
-        builder.vars.insert(id, Var::Scalar(value));
-        id
     }
 
     fn make_concrete(&self) {
@@ -602,6 +610,7 @@ impl OpGraphBuilder {
             data_type,
         });
         self.inputs.insert(id, Arc::clone(tensor));
+        self.node_to_tensor.insert(id, Arc::downgrade(tensor));
         id
     }
 
@@ -660,9 +669,8 @@ mod cuda {
 
         for (node, tensor) in &graph.node_to_tensor {
             if let Some(tensor) = tensor.upgrade() {
-                if let Some(val) = outputs.remove(node) {
-                    tensor.lock().data = Data::Concrete(ConcreteData::Cuda(val));
-                }
+                let val = outputs.remove(node).unwrap();
+                tensor.lock().data = Data::Concrete(ConcreteData::Cuda(val));
             }
         }
     }

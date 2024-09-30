@@ -32,12 +32,22 @@ use cudarc::{
 };
 use half::{bf16, f16};
 use slotmap::SecondaryMap;
-use std::{ffi::c_void, mem, ptr};
+use std::{
+    ffi::c_void,
+    fmt::{Debug, Formatter},
+    mem, ptr,
+};
 
 /// Maps nodes to the tensors containing their output data.
 #[derive(Default)]
 pub struct TensorMap {
     map: SecondaryMap<NodeId, RawTensor>,
+}
+
+impl Debug for TensorMap {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.map.keys().collect::<Vec<_>>().fmt(f)
+    }
 }
 
 impl TensorMap {

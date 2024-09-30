@@ -4,12 +4,15 @@ use crate::{
 };
 use ahash::AHashMap;
 use slotmap::{SecondaryMap, SlotMap};
-use std::sync::atomic::AtomicU64;
+use std::{
+    fmt::{Debug, Formatter},
+    sync::atomic::AtomicU64,
+};
 
 pub mod op;
 pub mod subgraph;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct OpGraph {
     nodes: SlotMap<NodeId, Node>,
     outputs: Vec<NodeId>,
@@ -61,6 +64,13 @@ impl OpGraph {
                     .map(|&id| id_mapping[id])
                     .collect(),
             );
+        }
+
+        for &input in &self.inputs {
+            other.inputs.push(id_mapping[input]);
+        }
+        for &output in &self.outputs {
+            other.outputs.push(id_mapping[output]);
         }
 
         id_mapping
@@ -136,6 +146,18 @@ impl OpGraph {
 
     pub fn is_input(&self, id: NodeId) -> bool {
         self.inputs.contains(&id)
+    }
+}
+
+impl Debug for OpGraph {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut f = f.debug_list();
+
+        for (id, node) in &self.nodes {
+            f.entry(&(id, node));
+        }
+
+        f.finish()
     }
 }
 

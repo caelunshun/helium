@@ -1,5 +1,5 @@
 use crate::Tensor;
-use std::ops::{Add, Mul};
+use std::ops::{Add, Mul, Sub};
 
 mod gradients;
 mod param;
@@ -10,6 +10,7 @@ pub use param::{Param, ParamId};
 pub use tape::Tape;
 
 /// Tensor with autodiff.
+#[derive(Clone)]
 pub struct AdTensor<const D: usize> {
     tensor: Tensor<D>,
     tape: Tape,
@@ -84,6 +85,39 @@ impl<const D: usize> Add<f32> for AdTensor<D> {
         let tensor = self.tensor + rhs;
         let tape = self.tape.append_unary(|flow: Tensor<D>| flow);
         Self { tensor, tape }
+    }
+}
+
+impl<const D: usize, T> Sub<T> for AdTensor<D>
+where
+    T: Into<Self>,
+{
+    type Output = Self;
+
+    fn sub(self, rhs: T) -> Self::Output {
+        let rhs = rhs.into();
+
+        let tape =
+            self.tape
+                .append_binary(rhs.tape, |flow: Tensor<D>| flow, |flow: Tensor<D>| -flow);
+
+        Self {
+            tensor: self.tensor - rhs.tensor,
+            tape,
+        }
+    }
+}
+
+impl<const D: usize> Sub<f32> for AdTensor<D> {
+    type Output = Self;
+
+    fn sub(self, rhs: f32) -> Self::Output {
+        let tape = self.tape.append_unary(|flow: Tensor<D>| flow);
+
+        Self {
+            tensor: self.tensor - rhs,
+            tape,
+        }
     }
 }
 

@@ -22,3 +22,36 @@ fn autodiff_scalar() {
     assert_ulps_eq!(grad_param1.into_scalar::<f32>(), 640.0);
     assert_ulps_eq!(grad_param2.into_scalar::<f32>(), 400.0);
 }
+
+#[test]
+fn basic_gradient_descent() {
+    // Use gradient descent to converge a parameter onto sqrt(X)
+    const X: f32 = 1001.0;
+
+    let mut guess = Param::new(Tensor::<1>::from_array([1.0], DEVICE));
+    loop {
+        let result = AdTensor::from(guess.clone()).pow_scalar(2.0);
+        let error = (result - X).pow_scalar(2.0);
+        let mut grads = error.clone().backward();
+
+        let error = error.into_value().into_scalar::<f32>().sqrt();
+        if error < 1e-3 {
+            // Converged!
+            println!(
+                "{error} error with guess = {}",
+                guess.value().clone().into_scalar::<f32>()
+            );
+            break;
+        }
+
+        println!(
+            "error: {error}, guess: {}",
+            guess.value().clone().into_scalar::<f32>()
+        );
+
+        let learning_rate = 1e-4;
+        let gradient: Tensor<1> = grads.remove(guess.id());
+
+        guess.set_value(guess.value().clone() - (gradient * learning_rate));
+    }
+}
