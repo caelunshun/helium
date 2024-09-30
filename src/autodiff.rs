@@ -44,6 +44,24 @@ impl<const D: usize> AdTensor<D> {
         }
     }
 
+    pub fn matmul(self, rhs: Self) -> Self {
+        let result = self.tensor.clone().matmul(rhs.tensor.clone());
+
+        let a = self.tensor.clone();
+        let b = rhs.tensor.clone();
+
+        let tape = self.tape.append_binary(
+            rhs.tape,
+            move |flow: Tensor<D>| b.clone().matmul(flow.transpose()),
+            move |flow: Tensor<D>| a.clone().transpose().matmul(flow),
+        );
+
+        Self {
+            tape,
+            tensor: result,
+        }
+    }
+
     pub fn backward(self) -> Gradients {
         let shape = self.tensor.shape();
         let ones = Tensor::from_vec(

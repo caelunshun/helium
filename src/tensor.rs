@@ -172,6 +172,18 @@ impl<const D: usize> Tensor<D> {
         )
     }
 
+    /// Swaps last two dimensions.
+    pub fn transpose(self) -> Self {
+        const {
+            if D < 2 {
+                panic!("transpose requires at least two dimensions");
+            }
+        }
+
+        let (cx, this) = self.make_graph();
+        Self::from_op(&cx, Op::Transpose(op::Transpose { input: this }))
+    }
+
     pub fn pow_scalar(self, power: f32) -> Self {
         self.op_unary_pointwise_scalar(UnaryPointwiseOp::PowScalar, power)
     }

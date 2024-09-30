@@ -34,6 +34,9 @@ struct Planner<'a> {
     /// Nodes that have been covered in the plan
     covered: AHashSet<NodeId>,
 
+    matmul_transpose_a: SecondaryMap<NodeId, NodeId>,
+    matmul_transpose_b: SecondaryMap<NodeId, NodeId>,
+
     instr_graph: InstrGraph,
 }
 
@@ -66,6 +69,8 @@ impl<'a> Planner<'a> {
             covered,
             indegrees,
             instr_graph: InstrGraph::new(),
+            matmul_transpose_a: SecondaryMap::default(),
+            matmul_transpose_b: SecondaryMap::default(),
         }
     }
 
@@ -116,19 +121,43 @@ impl<'a> Planner<'a> {
                 self.mark_covered(node_id);
             }
             Op::Matmul(op) => {
+                let (a_input, transpose_a) = match self.matmul_transpose_a.get(node_id) {
+                    Some(input) => (*input, true),
+                    None => (op.input_a, false),
+                };
+                let (b_input, transpose_b) = match self.matmul_transpose_b.get(node_id) {
+                    Some(input) => (*input, true),
+                    None => (op.input_b, false),
+                };
+
                 self.instr_graph.insert(Instr::Matmul(MatmulInstr {
-                    a_input: op.input_a,
-                    b_input: op.input_b,
+                    a_input,
+                    b_input,
                     output_type: node.descriptor.data_type,
-                    transpose_a: false,
-                    transpose_b: false,
+                    transpose_a,
+                    transpose_b,
                     bias_input: None,
                     epilogue: cublasLtEpilogue_t::CUBLASLT_EPILOGUE_DEFAULT,
                     output: node_id,
                 }));
                 self.mark_covered(node_id);
             }
-            Op::Transpose(_) => todo!(),
+            Op::Transpose(op) => {
+                for next_node in self.graph.outbound_edges(node_id) {
+                    let Node::Intermediate(Intermediate {
+                        op: Op::Matmul(matmul),
+                        ..
+                    }) = self.graph.get(*next_node)
+                    else {
+                        unimplemented!("transpose op without matmul")
+                    };
+                    if node_id == matmul.input_a {
+                        self.matmul_transpose_a.insert(*next_node, op.input);
+                    } else {
+                        self.matmul_transpose_b.insert(*next_node, op.input);
+                    }
+                }
+            }
             Op::UnaryPointwise(_) | Op::BinaryPointwise(_) | Op::ChangeDataType(_) => {
                 let greedy = self.cover_greedy_pointwise(node_id);
                 let subgraph = OpSubgraph::from_nodes(&self.graph, greedy.covered_nodes);
