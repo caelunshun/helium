@@ -4,8 +4,8 @@ use crate::{
     opgraph::{
         op,
         op::{
-            BinaryPointwise, BinaryPointwiseOp, Op, Reduce, ReduceOp, UnaryPointwise,
-            UnaryPointwiseOp,
+            BinaryPointwise, BinaryPointwiseOp, BroadcastAxis, Op, Reduce, ReduceOp, RestrctureOp,
+            UnaryPointwise, UnaryPointwiseOp,
         },
         Descriptor, NodeId, OpGraph, Var, VarId, VarMap,
     },
@@ -184,6 +184,68 @@ impl<const D: usize> Tensor<D> {
 
         let (cx, this) = self.make_graph();
         Self::from_op(&cx, Op::Transpose(op::Transpose { input: this }))
+    }
+
+    /// Broadcasts the given dimension, which must be of size 1.
+    pub fn broadcast(self, axis: i32, new_size: usize) -> Self {
+        let (cx, this) = self.make_graph();
+
+        let axis = Self::axis_to_unsigned(axis);
+
+        assert!(new_size > 0, "must broadcast to a positive size");
+        assert_eq!(
+            self.shape()[axis],
+            1,
+            "can only broadcast an axis of size 1"
+        );
+
+        Self::from_op(
+            &cx,
+            Op::Restructure(op::Restructure {
+                input: this,
+                op: RestrctureOp::BroadcastAxis {
+                    axis: BroadcastAxis::Existing(axis),
+                    new_size,
+                },
+            }),
+        )
+    }
+
+    /// Expands the tensor size by 1 dimension.
+    pub fn expand<const D2: usize>(self, new_axis_size: usize) -> Tensor<D2> {
+        const {
+            if D2 != D + 1 {
+                panic!("output tensor must have exactly one additional dimension");
+            }
+        }
+
+        assert!(new_axis_size > 0, "must broadcast to a positive size");
+
+        let (cx, this) = self.make_graph();
+
+        Tensor::from_op(
+            &cx,
+            Op::Restructure(op::Restructure {
+                input: this,
+                op: RestrctureOp::BroadcastAxis {
+                    axis: BroadcastAxis::Expand,
+                    new_size: new_axis_size,
+                },
+            }),
+        )
+    }
+
+    /// Converts Python-style dimension indexes to usize.
+    const fn axis_to_unsigned(i: i32) -> usize {
+        let result = if i < 0 {
+            D - ((-i) as usize)
+        } else {
+            i as usize
+        };
+        if result >= D {
+            panic!("axis index out of bounds");
+        }
+        result
     }
 
     pub fn pow_scalar(self, power: f32) -> Self {

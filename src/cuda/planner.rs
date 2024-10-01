@@ -2,8 +2,9 @@ use crate::{
     cuda::{
         context::CudaContext,
         error::CudaError,
+        kernel,
         kernel::{pointwise, reduction},
-        plan::{Instr, MatmulInstr, Plan, ReshapeInstr, Step, UploadTensorInstr},
+        plan::{Instr, MatmulInstr, Plan, ReshapeInstr, RestructureInstr, Step, UploadTensorInstr},
     },
     opgraph::{
         op::{Op, Reduce},
@@ -158,10 +159,7 @@ impl<'a> Planner<'a> {
                     }
                 }
             }
-            Op::UnaryPointwise(_)
-            | Op::BinaryPointwise(_)
-            | Op::ChangeDataType(_)
-            | Op::Restructure(_) => {
+            Op::UnaryPointwise(_) | Op::BinaryPointwise(_) | Op::ChangeDataType(_) => {
                 let greedy = self.cover_greedy_pointwise(node_id);
                 let subgraph = OpSubgraph::from_nodes(&self.graph, greedy.covered_nodes);
 
@@ -225,6 +223,22 @@ impl<'a> Planner<'a> {
                     output: node_id,
                     new_shape: op.new_shape.clone(),
                 }));
+                self.mark_covered(node_id);
+            }
+            Op::Restructure(op) => {
+                let subgraph = OpSubgraph::from_nodes(&self.graph, vec![node_id]);
+                let input_descriptor = self.graph.get(op.input).descriptor();
+                let kernel = self.cx.get_or_init_kernel(&subgraph, || {
+                    kernel::restructure::generate_kernel(op, node_id, input_descriptor)
+                })?;
+
+                self.instr_graph
+                    .insert(Instr::Restructure(RestructureInstr {
+                        input: op.input,
+                        output: node_id,
+                        output_shape: node.descriptor.shape.clone(),
+                        kernel,
+                    }));
                 self.mark_covered(node_id);
             }
         }
@@ -495,7 +509,7 @@ mod tests {
         }));
         let c = graph.new_op(Op::Reduce(Reduce {
             input: b,
-            depth: 2,
+            depth: 1,
             op: ReduceOp::Max,
         }));
 

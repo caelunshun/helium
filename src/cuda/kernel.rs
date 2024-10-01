@@ -14,6 +14,7 @@ use std::cell::Cell;
 
 pub mod pointwise;
 pub mod reduction;
+pub mod restructure;
 
 #[derive(Debug, Clone)]
 pub struct Kernel {

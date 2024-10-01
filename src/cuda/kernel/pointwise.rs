@@ -8,7 +8,7 @@
 use crate::{
     cuda::kernel::{cpp_type_name, Context, Kernel, KernelParam},
     opgraph::{
-        op::{BinaryPointwiseOp, BroadcastAxis, Op, UnaryPointwiseOp},
+        op::{BinaryPointwiseOp, Op, UnaryPointwiseOp},
         subgraph::OpSubgraph,
         Intermediate, Node,
     },
@@ -49,42 +49,6 @@ fn generate_for_binary(op: BinaryPointwiseOp, lhs: &str, rhs: &str) -> String {
         BinaryPointwiseOp::Add => format!("{lhs} + {rhs}"),
         BinaryPointwiseOp::Mul => format!("{lhs} * {rhs}"),
         BinaryPointwiseOp::Pow => format!("powf({lhs}, {rhs})"),
-    }
-}
-
-/// Index mapping specifies the input indexes
-/// corresponding to each output index. Used
-/// to implement restructuring (e.g. broadcast).
-#[derive(Debug, Clone)]
-enum IndexMapping {
-    /// Same as input index.
-    Identity,
-    Broadcast {
-        input: Box<IndexMapping>,
-        axis: BroadcastAxis,
-    },
-}
-
-impl IndexMapping {
-    /// Generate code to compute the source index
-    /// based on the target index (where target index
-    /// is stored in the `index` variable).
-    ///
-    /// Returns the identifier of the resulting index variable.
-    pub fn generate_code_for_source_index(
-        &self,
-        statements: &mut String,
-        cx: &mut Context,
-    ) -> String {
-        let ident = cx.generate_identifier();
-        match self {
-            IndexMapping::Identity => {
-                format!("uint32_t {ident} = index;")
-            }
-            IndexMapping::Broadcast { input, axis } => {
-                todo!()
-            }
-        }
     }
 }
 
@@ -242,8 +206,6 @@ pub fn generate_pointwise_statements(subgraph: &OpSubgraph, cx: &mut Context) ->
                     let input = cx.intermediate(change.input);
                     code.push_str(&format!("float {output} = {input};\n"));
                 }
-                // Restructuring is handled in load_inputs / store_outputs
-                Op::Reshape(_) | Op::Restructure(_) => {}
                 _ => panic!("illegal op for pointwise: {:?}", node.op),
             }
         }

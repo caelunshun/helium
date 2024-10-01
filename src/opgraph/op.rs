@@ -56,10 +56,30 @@ impl Op {
                 data_type: *target_type,
                 ..get_input_descriptor(*input)
             },
+            Op::Matmul(op) => {
+                let input_a = get_input_descriptor(op.input_a);
+                let input_b = get_input_descriptor(op.input_b);
+
+                let mut shape = input_a.shape.clone();
+                shape.set_dim_size(shape.num_dims() - 1, input_a.shape.dim_at(-1));
+                shape.set_dim_size(shape.num_dims() - 2, input_b.shape.dim_at(-2));
+
+                Descriptor { shape, ..input_a }
+            }
+            Op::Transpose(op) => {
+                let input = get_input_descriptor(op.input);
+                let mut shape = input.shape.dims().to_vec();
+                let len = shape.len();
+                shape.swap(len - 1, len - 2);
+                Descriptor {
+                    shape: Shape::new(shape),
+                    data_type: DataType::F16,
+                }
+            }
             Op::UnaryPointwise(UnaryPointwise { input, .. })
-            | Op::BinaryPointwise(BinaryPointwise { lhs: input, .. })
-            | Op::Transpose(Transpose { input })
-            | Op::Matmul(Matmul { input_a: input, .. }) => get_input_descriptor(*input),
+            | Op::BinaryPointwise(BinaryPointwise { lhs: input, .. }) => {
+                get_input_descriptor(*input)
+            }
             Op::Reduce(Reduce { input, depth, .. }) => {
                 let input = get_input_descriptor(*input);
 
@@ -110,7 +130,6 @@ impl Op {
             OpKind::UnaryPointwise
                 | OpKind::BinaryPointwise
                 | OpKind::ChangeDataType
-                | OpKind::Restructure
                 | OpKind::Reshape
         )
     }
@@ -146,11 +165,6 @@ impl Op {
             }
         }
     }
-}
-
-fn tranpose_shape(shape: &mut Vec<usize>) {
-    let len = shape.len();
-    shape.swap(len - 1, len - 2);
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]

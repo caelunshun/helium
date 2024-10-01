@@ -260,13 +260,6 @@ fn execute_instr(
                 }
             }
 
-            dbg!(
-                a_input.shape(),
-                b_input.shape(),
-                b_input.dim_at(-1),
-                b_input.dim_at(-2)
-            );
-
             let a_layout = cublaslt::create_matrix_layout(
                 cuda_data_type(a_input.data_type()),
                 a_input.dim_at(-1) as u64,
@@ -313,7 +306,7 @@ fn execute_instr(
 
                 let stride_a = (a_input.dim_at(-1) * a_input.dim_at(-2)) as u64;
                 let stride_b = (b_input.dim_at(-1) * b_input.dim_at(-2)) as u64;
-                let stride_d = (out_cols * out_rows) as u64;
+                let stride_d = out_cols * out_rows;
 
                 unsafe {
                     // Note: C and D always have the same shape, so use stride_d for c_layout
@@ -423,6 +416,37 @@ fn execute_instr(
         Instr::Reshape(instr) => {
             let tensor = tensors.get(instr.input).reshaped(instr.new_shape.clone());
             tensors.insert(instr.output, tensor);
+        }
+        Instr::Restructure(instr) => {
+            alloc_outputs(
+                &instr.kernel,
+                tensors,
+                instr.output_shape.num_elements() as u32,
+                cx,
+                stream,
+                &instr.output_shape,
+            )?;
+            let mut params = build_params(
+                tensors,
+                vars,
+                &instr.kernel.params,
+                instr.output_shape.num_elements() as u32,
+                None,
+                bump,
+            );
+
+            let func = cx
+                .device()
+                .get_func(&instr.kernel.module_name, instr.kernel.func_name)
+                .expect("restructure module not found?");
+
+            unsafe {
+                func.launch_on_stream(
+                    stream.cudarc_stream(),
+                    launch_config(instr.output_shape.num_elements() as u32),
+                    &mut params,
+                )?;
+            }
         }
     }
     Ok(())

@@ -70,6 +70,7 @@ pub enum Instr {
     /// Execute a matmul with cublasLT.
     Matmul(MatmulInstr),
     Reshape(ReshapeInstr),
+    Restructure(RestructureInstr),
 }
 
 impl Instr {
@@ -94,6 +95,7 @@ impl Instr {
             }
             Instr::UploadTensor(_) => vec![],
             Instr::Reshape(instr) => vec![instr.input],
+            Instr::Restructure(instr) => vec![instr.input],
         }
     }
 
@@ -106,6 +108,7 @@ impl Instr {
             Instr::Matmul(config) => vec![config.output],
             Instr::UploadTensor(instr) => vec![instr.output],
             Instr::Reshape(instr) => vec![instr.output],
+            Instr::Restructure(instr) => vec![instr.output],
         }
     }
 }
@@ -138,4 +141,12 @@ pub struct ReshapeInstr {
     pub input: NodeId,
     pub new_shape: Shape,
     pub output: NodeId,
+}
+
+#[derive(Debug, Clone)]
+pub struct RestructureInstr {
+    pub input: NodeId,
+    pub output: NodeId,
+    pub kernel: Arc<LoadedKernel>,
+    pub output_shape: Shape,
 }

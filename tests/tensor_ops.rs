@@ -267,3 +267,28 @@ fn matmul_batched() {
 
     assert_ulps_eq!(result.as_slice(), expected.as_slice(), epsilon = 1e-2);
 }
+
+#[test]
+#[ignore] // TODO
+fn broadcast() {
+    let x = Tensor::<2>::from_array([[1.0], [2.0]], DEVICE);
+    let result = x.broadcast(-1, 4);
+
+    assert_eq!(result.shape(), [2, 4]);
+    assert_eq!(
+        result.into_vec::<f32>().as_slice(),
+        &[1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0][..]
+    );
+}
+
+#[test]
+fn expand() {
+    let x = Tensor::<1>::from_array([1.0, 2.0], DEVICE);
+    let result = x.expand(4);
+
+    assert_eq!(result.shape(), [4, 2]);
+    assert_eq!(
+        result.into_vec::<f32>().as_slice(),
+        &[1.0, 2.0, 1.0, 2.0, 1.0, 2.0, 1.0, 2.0][..]
+    );
+}
