@@ -55,6 +55,11 @@ Plan {
                     },
                     reduction_depth: 2,
                     initial_reduced_value: -inf,
+                    output_shape: Shape(
+                        [
+                            1,
+                        ],
+                    ),
                 },
             ],
         ),

@@ -3,7 +3,7 @@ use crate::{
         context::CudaContext,
         error::CudaError,
         kernel::{pointwise, reduction},
-        plan::{Instr, MatmulInstr, Plan, Step, UploadTensorInstr},
+        plan::{Instr, MatmulInstr, Plan, ReshapeInstr, Step, UploadTensorInstr},
     },
     opgraph::{
         op::{Op, Reduce},
@@ -158,7 +158,10 @@ impl<'a> Planner<'a> {
                     }
                 }
             }
-            Op::UnaryPointwise(_) | Op::BinaryPointwise(_) | Op::ChangeDataType(_) => {
+            Op::UnaryPointwise(_)
+            | Op::BinaryPointwise(_)
+            | Op::ChangeDataType(_)
+            | Op::Restructure(_) => {
                 let greedy = self.cover_greedy_pointwise(node_id);
                 let subgraph = OpSubgraph::from_nodes(&self.graph, greedy.covered_nodes);
 
@@ -184,6 +187,12 @@ impl<'a> Planner<'a> {
                             kernel,
                             reduction_depth: *depth,
                             initial_reduced_value: reduce_op.default_value(),
+                            output_shape: self
+                                .graph
+                                .get(reduction_node_id)
+                                .descriptor()
+                                .shape
+                                .clone(),
                         }
                     }
                     None => {
@@ -206,7 +215,16 @@ impl<'a> Planner<'a> {
                     kernel,
                     reduction_depth: op.depth,
                     initial_reduced_value: op.op.default_value(),
+                    output_shape: self.graph.get(node_id).descriptor().shape.clone(),
                 });
+                self.mark_covered(node_id);
+            }
+            Op::Reshape(op) => {
+                self.instr_graph.insert(Instr::Reshape(ReshapeInstr {
+                    input: op.input,
+                    output: node_id,
+                    new_shape: op.new_shape.clone(),
+                }));
                 self.mark_covered(node_id);
             }
         }
@@ -446,6 +464,7 @@ mod tests {
             },
             Descriptor,
         },
+        shape::Shape,
     };
 
     #[test]
@@ -453,15 +472,15 @@ mod tests {
         let mut graph = OpGraph::new();
 
         let input_a = graph.new_input(Descriptor {
-            dimension: 2,
+            shape: Shape::new([1, 1]),
             data_type: DataType::Bf16,
         });
         let input_b = graph.new_input(Descriptor {
-            dimension: 2,
+            shape: Shape::new([1, 1]),
             data_type: DataType::Bf16,
         });
         let input_c = graph.new_input(Descriptor {
-            dimension: 2,
+            shape: Shape::new([1, 1]),
             data_type: DataType::F16,
         });
 

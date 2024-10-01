@@ -9,6 +9,7 @@ use crate::{
     },
     data_type::{DataType, DataVec},
     opgraph::{NodeId, VarMap},
+    shape::Shape,
 };
 use bumpalo::Bump;
 use cudarc::{
@@ -151,7 +152,7 @@ fn execute_instr(
                 .expect("pointwise module not found?");
 
             let first_input = tensors.get(kernel.first_tensor_input());
-            let shape = first_input.shape().to_vec();
+            let shape = first_input.shape().clone();
             let len = u32::try_from(first_input.num_elements()).expect("tensor too large");
 
             alloc_outputs(kernel, tensors, len, cx, stream, &shape)?;
@@ -166,6 +167,7 @@ fn execute_instr(
             kernel,
             reduction_depth,
             initial_reduced_value,
+            output_shape,
         } => {
             let func = cx
                 .device()
@@ -173,17 +175,11 @@ fn execute_instr(
                 .expect("reduction module not found?");
 
             let first_input = tensors.get(kernel.first_tensor_input());
-            let shape = first_input.shape().to_vec();
+            let shape = first_input.shape().clone();
             let len = u32::try_from(first_input.num_elements()).expect("tensor too large");
 
-            let output_shape = first_input.shape()
-                [..first_input.shape().len() - *reduction_depth as usize]
-                .to_vec();
-            let output_len =
-                u32::try_from(output_shape.iter().copied().product::<usize>()).unwrap();
-
-            let reduction_stride = first_input.shape()
-                [first_input.shape().len() - *reduction_depth as usize..]
+            let reduction_stride = first_input.shape().dims()
+                [first_input.shape().num_dims() - *reduction_depth as usize..]
                 .iter()
                 .copied()
                 .product::<usize>() as u32;
@@ -192,9 +188,14 @@ fn execute_instr(
 
             let mut reduction_output_tensor = RawTensor::new(
                 unsafe {
-                    Data::alloc_async(cx.device(), stream, DataType::F32, output_len as usize)?
+                    Data::alloc_async(
+                        cx.device(),
+                        stream,
+                        DataType::F32,
+                        output_shape.num_elements(),
+                    )?
                 },
-                output_shape,
+                output_shape.clone(),
             );
             reduction_output_tensor.fill(*initial_reduced_value, stream)?;
 
@@ -259,6 +260,13 @@ fn execute_instr(
                 }
             }
 
+            dbg!(
+                a_input.shape(),
+                b_input.shape(),
+                b_input.dim_at(-1),
+                b_input.dim_at(-2)
+            );
+
             let a_layout = cublaslt::create_matrix_layout(
                 cuda_data_type(a_input.data_type()),
                 a_input.dim_at(-1) as u64,
@@ -295,9 +303,9 @@ fn execute_instr(
                 None => d_layout,
             };
 
-            let batch_size = if a_input.shape().len() > 2 {
+            let batch_size = if a_input.shape().num_dims() > 2 {
                 // Batched matmul.
-                let batch_size = a_input.shape()[..a_input.shape().len() - 2]
+                let batch_size = a_input.shape().dims()[..a_input.shape().num_dims() - 2]
                     .iter()
                     .copied()
                     .product::<usize>();
@@ -336,14 +344,14 @@ fn execute_instr(
 
             let out_len = out_rows * out_cols * batch_size as u64;
 
-            let mut out_shape = a_input.shape()[..a_input.shape().len() - 2].to_vec();
+            let mut out_shape = a_input.shape().dims()[..a_input.shape().num_dims() - 2].to_vec();
             out_shape.extend([out_cols as usize, out_rows as usize]);
 
             let mut output_tensor = RawTensor::new(
                 unsafe {
                     Data::alloc_async(cx.device(), stream, config.output_type, out_len as usize)?
                 },
-                out_shape,
+                Shape::new(out_shape),
             );
 
             let alpha = if scale_type == CUDA_R_16F {
@@ -391,25 +399,29 @@ fn execute_instr(
                 DataVec::F32(data) => RawTensor::from_slice_async::<f32>(
                     data,
                     instr.data_type,
-                    shape,
+                    shape.clone(),
                     stream,
                     cx.device(),
                 )?,
                 DataVec::Bf16(data) => RawTensor::from_slice_async::<bf16>(
                     data,
                     instr.data_type,
-                    shape,
+                    shape.clone(),
                     stream,
                     cx.device(),
                 )?,
                 DataVec::F16(data) => RawTensor::from_slice_async::<f16>(
                     data,
                     instr.data_type,
-                    shape,
+                    shape.clone(),
                     stream,
                     cx.device(),
                 )?,
             };
+            tensors.insert(instr.output, tensor);
+        }
+        Instr::Reshape(instr) => {
+            let tensor = tensors.get(instr.input).reshaped(instr.new_shape.clone());
             tensors.insert(instr.output, tensor);
         }
     }
@@ -422,13 +434,13 @@ fn alloc_outputs(
     len: u32,
     cx: &CudaContext,
     stream: &CudaStream,
-    shape: &[usize],
+    shape: &Shape,
 ) -> Result<(), CudaError> {
     for (node, data_type) in &kernel.output_types {
         if kernel.reduction_output != Some(*node) {
             let tensor = RawTensor::new(
                 unsafe { Data::alloc_async(cx.device(), stream, *data_type, len as usize)? },
-                shape,
+                shape.clone(),
             );
             tensors.insert(*node, tensor);
         }

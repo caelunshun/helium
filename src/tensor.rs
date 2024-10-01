@@ -9,6 +9,7 @@ use crate::{
         },
         Descriptor, NodeId, OpGraph, Var, VarId, VarMap,
     },
+    shape::Shape,
 };
 use parking_lot::Mutex;
 use slotmap::{Key, SecondaryMap};
@@ -41,7 +42,6 @@ impl<const D: usize> Tensor<D> {
             data: Data::Virtual(VirtualData {
                 graph: builder.clone(),
                 node: NodeId::null(),
-                shape: shape.to_vec(),
                 data_type: T::data_type(),
             }),
         }));
@@ -49,14 +49,15 @@ impl<const D: usize> Tensor<D> {
         let mut builder = builder.lock();
 
         let data_var = VarId::new();
-        builder
-            .vars
-            .insert(data_var, Var::Tensor(T::into_data_vec(vec), shape.to_vec()));
+        builder.vars.insert(
+            data_var,
+            Var::Tensor(T::into_data_vec(vec), Shape::new(shape)),
+        );
         let node = builder.new_op(
             Op::UploadTensor(op::UploadTensor {
                 data_var,
                 descriptor: Descriptor {
-                    dimension: D as u32,
+                    shape: Shape::new(shape),
                     data_type: T::data_type(),
                 },
             }),
@@ -114,6 +115,7 @@ impl<const D: usize> Tensor<D> {
             .lock()
             .data
             .shape()
+            .dims()
             .try_into()
             .expect("dimension does not match D const parameter?")
     }
@@ -358,19 +360,8 @@ impl<const D: usize> Tensor<D> {
             data: Data::Virtual(VirtualData {
                 graph: Arc::clone(cx_arc),
                 node: NodeId::null(),
-                shape: op.output_shape(
-                    |node| {
-                        cx.node_to_tensor[node]
-                            .upgrade()
-                            .unwrap()
-                            .lock()
-                            .shape()
-                            .to_vec()
-                    },
-                    &cx.vars,
-                ),
                 data_type: op
-                    .output_descriptor(|node| cx.op_graph.get(node).descriptor())
+                    .output_descriptor(|node| cx.op_graph.get(node).descriptor().clone())
                     .data_type,
             }),
         }));
@@ -396,9 +387,9 @@ impl<const D: usize> Tensor<D> {
             Data::Virtual(virt) => (virt.graph.clone(), virt.node),
             Data::Concrete(_) => {
                 let cx = Arc::new(Mutex::new(OpGraphBuilder::new(self.device)));
-                let node =
-                    cx.lock()
-                        .new_input(guard.shape().len() as u32, guard.data_type(), &self.inner);
+                let node = cx
+                    .lock()
+                    .new_input(guard.shape(), guard.data_type(), &self.inner);
                 (cx, node)
             }
         }
@@ -428,7 +419,7 @@ impl<const D: usize> Tensor<D> {
             Data::Concrete(_) => {
                 builder
                     .lock()
-                    .new_input(guard.shape().len() as u32, guard.data_type(), &self.inner)
+                    .new_input(guard.shape(), guard.data_type(), &self.inner)
             }
         }
     }
@@ -499,12 +490,12 @@ struct TensorInner {
 }
 
 impl TensorInner {
-    pub fn shape(&self) -> &[usize] {
+    pub fn shape(&self) -> Shape {
         match &self.data {
-            Data::Virtual(virt) => &virt.shape,
+            Data::Virtual(virt) => virt.shape(),
             Data::Concrete(conc) => match conc {
                 #[cfg(feature = "cuda")]
-                ConcreteData::Cuda(tensor) => tensor.shape(),
+                ConcreteData::Cuda(tensor) => tensor.shape().clone(),
                 #[cfg(feature = "cpu")]
                 ConcreteData::Cpu => todo!(),
             },
@@ -530,10 +521,10 @@ enum Data {
 }
 
 impl Data {
-    fn shape(&self) -> &[usize] {
+    fn shape(&self) -> Shape {
         match self {
-            Data::Virtual(data) => &data.shape,
-            Data::Concrete(data) => data.shape(),
+            Data::Virtual(data) => data.shape(),
+            Data::Concrete(data) => data.shape().clone(),
         }
     }
 }
@@ -541,8 +532,19 @@ impl Data {
 struct VirtualData {
     graph: OpGraphBuilderHandle,
     node: NodeId,
-    shape: Vec<usize>,
     data_type: DataType,
+}
+
+impl VirtualData {
+    pub fn shape(&self) -> Shape {
+        self.graph
+            .lock()
+            .op_graph
+            .get(self.node)
+            .descriptor()
+            .shape
+            .clone()
+    }
 }
 
 enum ConcreteData {
@@ -554,7 +556,7 @@ enum ConcreteData {
 }
 
 impl ConcreteData {
-    fn shape(&self) -> &[usize] {
+    fn shape(&self) -> &Shape {
         match self {
             ConcreteData::Cuda(x) => x.shape(),
             ConcreteData::Cpu => todo!(),
@@ -613,14 +615,11 @@ impl OpGraphBuilder {
 
     pub fn new_input(
         &mut self,
-        dimension: u32,
+        shape: Shape,
         data_type: DataType,
         tensor: &Arc<Mutex<TensorInner>>,
     ) -> NodeId {
-        let id = self.op_graph.new_input(Descriptor {
-            dimension,
-            data_type,
-        });
+        let id = self.op_graph.new_input(Descriptor { shape, data_type });
         self.inputs.insert(id, Arc::clone(tensor));
         self.node_to_tensor.insert(id, Arc::downgrade(tensor));
         id

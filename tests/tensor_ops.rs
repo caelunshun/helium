@@ -126,6 +126,9 @@ fn reduce_min() {
     let min_all: Tensor<1> = x.clone().reduce_min(2);
     let min_dim1: Tensor<2> = x.reduce_min(1);
 
+    assert_eq!(min_all.shape(), [1]);
+    assert_eq!(min_dim1.shape(), [3, 1]);
+
     assert_ulps_eq!(min_all.into_scalar::<f32>(), 1.0);
     assert_ulps_eq!(min_dim1.into_vec::<f32>().as_slice(), &[1.0, 5.0, 9.0][..]);
 }

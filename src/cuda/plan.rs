@@ -2,6 +2,7 @@ use crate::{
     cuda::{context::LoadedKernel, kernel::KernelParam},
     data_type::DataType,
     opgraph::{NodeId, VarId},
+    shape::Shape,
 };
 use cudarc::cublaslt::sys::cublasLtEpilogue_t;
 use std::sync::Arc;
@@ -64,9 +65,11 @@ pub enum Instr {
         kernel: Arc<LoadedKernel>,
         reduction_depth: u32,
         initial_reduced_value: f32,
+        output_shape: Shape,
     },
     /// Execute a matmul with cublasLT.
     Matmul(MatmulInstr),
+    Reshape(ReshapeInstr),
 }
 
 impl Instr {
@@ -90,6 +93,7 @@ impl Instr {
                 deps
             }
             Instr::UploadTensor(_) => vec![],
+            Instr::Reshape(instr) => vec![instr.input],
         }
     }
 
@@ -101,6 +105,7 @@ impl Instr {
             }
             Instr::Matmul(config) => vec![config.output],
             Instr::UploadTensor(instr) => vec![instr.output],
+            Instr::Reshape(instr) => vec![instr.output],
         }
     }
 }
@@ -125,5 +130,12 @@ pub struct MatmulInstr {
     pub bias_input: Option<NodeId>,
     /// Optional fused ReLU or GeLU on the output
     pub epilogue: cublasLtEpilogue_t,
+    pub output: NodeId,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReshapeInstr {
+    pub input: NodeId,
+    pub new_shape: Shape,
     pub output: NodeId,
 }

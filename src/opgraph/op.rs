@@ -1,6 +1,7 @@
 use crate::{
     data_type::DataType,
-    opgraph::{Descriptor, NodeId, VarId, VarMap},
+    opgraph::{Descriptor, NodeId, VarId},
+    shape::Shape,
 };
 use slotmap::SecondaryMap;
 
@@ -13,6 +14,8 @@ pub enum Op {
     BinaryPointwise(BinaryPointwise),
     ChangeDataType(ChangeDataType),
     Reduce(Reduce),
+    Restructure(Restructure),
+    Reshape(Reshape),
 }
 
 impl Op {
@@ -25,6 +28,8 @@ impl Op {
             Op::ChangeDataType(op) => vec![op.input],
             Op::Reduce(op) => vec![op.input],
             Op::UploadTensor(_) => vec![],
+            Op::Restructure(op) => vec![op.input],
+            Op::Reshape(op) => vec![op.input],
         }
     }
 
@@ -48,8 +53,8 @@ impl Op {
     ) -> Descriptor {
         match self {
             Op::ChangeDataType(ChangeDataType { target_type, input }) => Descriptor {
-                dimension: get_input_descriptor(*input).dimension,
                 data_type: *target_type,
+                ..get_input_descriptor(*input)
             },
             Op::UnaryPointwise(UnaryPointwise { input, .. })
             | Op::BinaryPointwise(BinaryPointwise { lhs: input, .. })
@@ -57,47 +62,30 @@ impl Op {
             | Op::Matmul(Matmul { input_a: input, .. }) => get_input_descriptor(*input),
             Op::Reduce(Reduce { input, depth, .. }) => {
                 let input = get_input_descriptor(*input);
+
+                let mut shape = input.shape.dims().to_vec();
+                shape.truncate(shape.len() - *depth as usize + 1);
+                *shape.last_mut().unwrap() = 1;
+
                 Descriptor {
-                    dimension: input.dimension - *depth + 1,
+                    shape: Shape::new(shape),
                     data_type: DataType::F32,
                 }
             }
-            Op::UploadTensor(op) => op.descriptor,
-        }
-    }
-
-    pub fn output_shape(
-        &self,
-        get_input_shape: impl Fn(NodeId) -> Vec<usize>,
-        vars: &VarMap,
-    ) -> Vec<usize> {
-        match self {
-            Op::Matmul(config) => {
-                let shape_a = get_input_shape(config.input_a);
-                let shape_b = get_input_shape(config.input_b);
-
-                let mut out = shape_a.clone();
-                let len = out.len();
-                out[len - 2] = shape_b[shape_b.len() - 2];
-                out
+            Op::UploadTensor(op) => op.descriptor.clone(),
+            Op::Reshape(op) => {
+                let input = get_input_descriptor(op.input);
+                Descriptor {
+                    shape: op.new_shape.clone(),
+                    ..input
+                }
             }
-            Op::Transpose(config) => {
-                let mut shape = get_input_shape(config.input);
-                tranpose_shape(&mut shape);
-                shape
-            }
-            Op::UnaryPointwise(UnaryPointwise { input, .. })
-            | Op::ChangeDataType(ChangeDataType { input, .. })
-            | Op::BinaryPointwise(BinaryPointwise { lhs: input, .. }) => get_input_shape(*input),
-            Op::Reduce(Reduce { depth, input, .. }) => {
-                let mut shape = get_input_shape(*input);
-                shape.truncate((shape.len() - *depth as usize).max(1));
-
-                shape
-            }
-            Op::UploadTensor(op) => {
-                let (_, shape) = vars.get(op.data_var).expect_tensor();
-                shape.to_vec()
+            Op::Restructure(op) => {
+                let input = get_input_descriptor(op.input);
+                Descriptor {
+                    shape: op.op.compute_output_shape(input.shape.dims()),
+                    ..input
+                }
             }
         }
     }
@@ -111,13 +99,19 @@ impl Op {
             Op::UnaryPointwise(_) => OpKind::UnaryPointwise,
             Op::BinaryPointwise(_) => OpKind::BinaryPointwise,
             Op::ChangeDataType(_) => OpKind::ChangeDataType,
+            Op::Restructure(_) => OpKind::Restructure,
+            Op::Reshape(_) => OpKind::Reshape,
         }
     }
 
     pub fn is_pointwise(&self) -> bool {
         matches!(
             self.kind(),
-            OpKind::UnaryPointwise | OpKind::BinaryPointwise | OpKind::ChangeDataType
+            OpKind::UnaryPointwise
+                | OpKind::BinaryPointwise
+                | OpKind::ChangeDataType
+                | OpKind::Restructure
+                | OpKind::Reshape
         )
     }
 
@@ -144,6 +138,12 @@ impl Op {
             Op::Reduce(op) => {
                 op.input = mapping[op.input];
             }
+            Op::Restructure(op) => {
+                op.input = mapping[op.input];
+            }
+            Op::Reshape(op) => {
+                op.input = mapping[op.input];
+            }
         }
     }
 }
@@ -162,6 +162,8 @@ pub enum OpKind {
     UnaryPointwise,
     BinaryPointwise,
     ChangeDataType,
+    Restructure,
+    Reshape,
 }
 
 /// Batched multiplication of column-major matrices stored in the last
@@ -262,4 +264,45 @@ impl ReduceOp {
 pub struct UploadTensor {
     pub data_var: VarId,
     pub descriptor: Descriptor,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Restructure {
+    pub input: NodeId,
+    pub op: RestrctureOp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum RestrctureOp {
+    /// Broadcast an axis originally of length 1.
+    BroadcastAxis {
+        axis: BroadcastAxis,
+        new_size: usize,
+    },
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub enum BroadcastAxis {
+    Existing(usize),
+    /// Prepend a new axis.
+    Expand,
+}
+
+impl RestrctureOp {
+    pub fn compute_output_shape(&self, input: &[usize]) -> Shape {
+        let mut shape = input.to_vec();
+        match self {
+            RestrctureOp::BroadcastAxis { axis, new_size } => match *axis {
+                BroadcastAxis::Existing(axis) => shape[axis] = *new_size,
+                BroadcastAxis::Expand => shape.insert(0, *new_size),
+            },
+        }
+        Shape::new(shape)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Reshape {
+    pub input: NodeId,
+    pub new_shape: Shape,
 }

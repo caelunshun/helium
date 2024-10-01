@@ -10,6 +10,7 @@ pub mod device;
 pub mod dyn_tensor;
 pub mod error;
 pub mod opgraph;
+mod shape;
 pub mod tensor;
 
 #[doc(inline)]

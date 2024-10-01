@@ -1,6 +1,7 @@
 use crate::{
     cuda::{context::CudaStream, error::CudaError},
     data_type::{DataType, DataTypeConversion},
+    shape::Shape,
 };
 use cudarc::{
     driver,
@@ -12,15 +13,23 @@ use std::{mem, ptr, sync::Arc};
 /// Raw CUDA tensor.
 #[derive(Clone)]
 pub struct RawTensor {
-    shape: Vec<usize>,
+    shape: Shape,
     data: Arc<Data>,
 }
 
 impl RawTensor {
-    pub fn new(data: Data, shape: impl Into<Vec<usize>>) -> Self {
+    pub fn new(data: Data, shape: Shape) -> Self {
         Self {
-            shape: shape.into(),
+            shape,
             data: Arc::new(data),
+        }
+    }
+
+    pub fn reshaped(&self, new_shape: Shape) -> Self {
+        assert_eq!(new_shape.num_elements(), self.num_elements());
+        Self {
+            data: Arc::clone(&self.data),
+            shape: new_shape,
         }
     }
 
@@ -55,27 +64,19 @@ impl RawTensor {
     }
 
     pub fn dimension(&self) -> u32 {
-        self.shape.len() as u32
+        self.shape.num_dims() as u32
     }
 
-    pub fn shape(&self) -> &[usize] {
+    pub fn shape(&self) -> &Shape {
         &self.shape
     }
 
     pub fn dim_at(&self, x: i32) -> usize {
-        if x >= self.shape.len() as i32 || (-x) > self.shape.len() as i32 {
-            return 1;
-        }
-
-        if x < 0 {
-            self.shape[self.shape.len() - x.abs() as usize]
-        } else {
-            self.shape[x as usize]
-        }
+        self.shape.dim_at(x)
     }
 
     pub fn num_elements(&self) -> usize {
-        self.shape.iter().copied().product()
+        self.shape.num_elements()
     }
 
     pub fn data(&self) -> &Data {
@@ -97,12 +98,11 @@ impl RawTensor {
     pub fn from_slice_async<T: DataTypeConversion>(
         slice: &[T],
         data_type: DataType,
-        shape: impl Into<Vec<usize>>,
+        shape: Shape,
         stream: &CudaStream,
         device: &Arc<CudaDevice>,
     ) -> Result<Self, CudaError> {
-        let shape = shape.into();
-        let len = shape.iter().copied().product::<usize>();
+        let len = shape.num_elements();
         let data = unsafe { Data::alloc_async(device, stream, data_type, len)? };
         match data_type {
             DataType::F16 => {

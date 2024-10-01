@@ -204,6 +204,7 @@ mod tests {
             subgraph::OpSubgraph,
             Descriptor, OpGraph, VarId,
         },
+        shape::Shape,
     };
     use cudarc::driver::CudaDevice;
     use std::sync::Arc;
@@ -214,11 +215,11 @@ mod tests {
 
         let input1 = graph.new_input(Descriptor {
             data_type: DataType::F16,
-            dimension: 2,
+            shape: Shape::new([1, 1]),
         });
         let input2 = graph.new_input(Descriptor {
             data_type: DataType::Bf16,
-            dimension: 2,
+            shape: Shape::new([1, 1]),
         });
 
         let var = VarId::new();
