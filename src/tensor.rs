@@ -663,7 +663,7 @@ type OpGraphBuilderHandle = Arc<Mutex<OpGraphBuilder>>;
 struct OpGraphBuilder {
     device: Device,
     op_graph: OpGraph,
-    inputs: SecondaryMap<NodeId, Arc<Mutex<TensorInner>>>,
+    inputs: SecondaryMap<NodeId, Arc<Mutex<Tenspub mod execution;orInner>>>,
     node_to_tensor: SecondaryMap<NodeId, Weak<Mutex<TensorInner>>>,
     vars: VarMap,
 }
