@@ -269,7 +269,6 @@ fn matmul_batched() {
 }
 
 #[test]
-#[ignore] // TODO
 fn broadcast() {
     let x = Tensor::<2>::from_array([[1.0], [2.0]], DEVICE);
     let result = x.broadcast(-1, 4);
@@ -290,5 +289,17 @@ fn expand() {
     assert_eq!(
         result.into_vec::<f32>().as_slice(),
         &[1.0, 2.0, 1.0, 2.0, 1.0, 2.0, 1.0, 2.0][..]
+    );
+}
+
+#[test]
+fn reshape() {
+    let x: Tensor<1> = Tensor::<1>::from_array([1.0, 2.0, 3.0, 4.0], DEVICE);
+    let result: Tensor<2> = x.reshape([2, 2]);
+
+    assert_eq!(result.shape(), [2, 2]);
+    assert_eq!(
+        result.into_vec::<f32>().as_slice(),
+        &[1.0, 2.0, 3.0, 4.0][..]
     );
 }

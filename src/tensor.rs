@@ -279,6 +279,38 @@ impl<const D: usize> Tensor<D> {
     pub fn reduce_max<const D2: usize>(self, depth: u32) -> Tensor<D2> {
         self.op_reduce(ReduceOp::Max, depth)
     }
+
+    pub fn reshape<const D2: usize>(self, new_shape: [usize; D2]) -> Tensor<D2> {
+        let new_shape = Shape::new(new_shape);
+        assert_eq!(
+            self.shape().iter().product::<usize>(),
+            new_shape.num_elements(),
+            "reshape() called with non-matching shape"
+        );
+
+        let (cx, this) = self.make_graph();
+        Tensor::from_op(
+            &cx,
+            Op::Reshape(op::Reshape {
+                input: this,
+                new_shape,
+            }),
+        )
+    }
+
+    /// Verifies that `D2 == D`, and returns `self` as a `Tensor<D2>`.
+    /// This is used to bypass some type system limitations.
+    pub fn transmute_dim<const D2: usize>(self) -> Tensor<D2> {
+        const {
+            if D != D2 {
+                panic!("D != D2 for transmute_dim()");
+            }
+        }
+        Tensor {
+            device: self.device,
+            inner: self.inner,
+        }
+    }
 }
 
 impl Tensor<1> {

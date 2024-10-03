@@ -16,10 +16,13 @@ pub fn generate_kernel(
     let dtype = cpp_type_name(input_descriptor.data_type);
 
     let index_mapping = match &op.op {
-        #[expect(unused)]
         RestrctureOp::BroadcastAxis { axis, new_size } => match *axis {
             BroadcastAxis::Existing(axis) => {
-                todo!()
+                let stride = input_descriptor.shape.dims()[axis..]
+                    .iter()
+                    .product::<usize>();
+                let out_stride = stride * *new_size;
+                format!("uint32_t srcIdx = globalIdx % {stride} + (globalIdx / {out_stride} * {stride});")
             }
             BroadcastAxis::Expand => {
                 let stride = input_descriptor.shape.num_elements();
