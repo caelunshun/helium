@@ -5,7 +5,7 @@ use crate::{cuda::error::CudaError, data_type::DataType, shape::Shape};
 use cudarc::cudnn::{
     sys::{
         cudnnBackendAttributeName_t::*, cudnnBackendAttributeType_t::*,
-        cudnnBackendDescriptorType_t::*, *,
+        cudnnBackendDescriptorType_t::*, cudnnDataType_t::CUDNN_DATA_FLOAT, *,
     },
     CudnnError,
 };
@@ -262,6 +262,12 @@ unsafe impl Attribute for u8 {
     }
 }
 
+unsafe impl Attribute for cudnnReduceTensorOp_t {
+    fn attrib_type() -> cudnnBackendAttributeType_t {
+        CUDNN_TYPE_REDUCTION_OPERATOR_TYPE
+    }
+}
+
 pub struct TensorDescriptor(Arc<RawDescriptor>, TensorUid);
 
 impl TensorDescriptor {
@@ -461,6 +467,65 @@ impl PointwiseMode {
             PointwiseMode::Recip => CUDNN_POINTWISE_RECIPROCAL,
             PointwiseMode::Tanh => CUDNN_POINTWISE_TANH_FWD,
             PointwiseMode::Sigmoid => CUDNN_POINTWISE_SIGMOID_FWD,
+        }
+    }
+}
+
+pub struct ReductionOpDescriptor {
+    reduction: Arc<RawDescriptor>,
+    op: Arc<RawDescriptor>,
+    refs: Vec<Arc<dyn Send + Sync>>,
+}
+
+unsafe impl OpDescriptor for ReductionOpDescriptor {
+    fn raw(&self) -> &RawDescriptor {
+        &self.op
+    }
+}
+
+impl ReductionOpDescriptor {
+    pub fn new(
+        mode: ReductionMode,
+        input: &TensorDescriptor,
+        output: &TensorDescriptor,
+    ) -> Result<Self, CudaError> {
+        let mut reduction = RawDescriptor::new(CUDNN_BACKEND_REDUCTION_DESCRIPTOR)?;
+        reduction.set_attribute(CUDNN_ATTR_REDUCTION_OPERATOR, mode.to_cudnn())?;
+        reduction.set_attribute(CUDNN_ATTR_REDUCTION_COMP_TYPE, CUDNN_DATA_FLOAT)?;
+        reduction.finalize()?;
+
+        let mut op = RawDescriptor::new(CUDNN_BACKEND_OPERATION_REDUCTION_DESCRIPTOR)?;
+        op.set_attribute(CUDNN_ATTR_OPERATION_REDUCTION_DESC, reduction.desc)?;
+        op.set_attribute(CUDNN_ATTR_OPERATION_REDUCTION_XDESC, input.0.desc)?;
+        op.set_attribute(CUDNN_ATTR_OPERATION_REDUCTION_YDESC, output.0.desc)?;
+        op.finalize()?;
+
+        Ok(Self {
+            reduction: Arc::new(reduction),
+            op: Arc::new(op),
+            refs: vec![input.0.clone(), output.0.clone()],
+        })
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ReductionMode {
+    Add,
+    Mul,
+    Min,
+    Max,
+    Mean,
+}
+
+impl ReductionMode {
+    fn to_cudnn(self) -> cudnnReduceTensorOp_t {
+        use cudnnReduceTensorOp_t::*;
+        match self {
+            ReductionMode::Add => CUDNN_REDUCE_TENSOR_ADD,
+            ReductionMode::Mul => CUDNN_REDUCE_TENSOR_MUL,
+            ReductionMode::Min => CUDNN_REDUCE_TENSOR_MIN,
+            ReductionMode::Max => CUDNN_REDUCE_TENSOR_MAX,
+            ReductionMode::Mean => CUDNN_REDUCE_TENSOR_AVG,
         }
     }
 }
@@ -681,7 +746,6 @@ mod tests {
     #[test]
     fn execute_matmul() {
         let cuda = CudaContext::new(0).unwrap();
-        cuda.device().bind_to_thread().unwrap();
 
         let cx = CudnnContext::new().unwrap();
 
@@ -711,6 +775,9 @@ mod tests {
             &Shape::new([1, size, size]),
         )
         .unwrap();
+        let desc_reduced =
+            TensorDescriptor::new(TensorKind::Concrete, DataType::F32, &Shape::new([1, 1, 1]))
+                .unwrap();
 
         let op_matmul =
             MatmulOpDescriptor::new(DataType::F32, &desc_a, &desc_b, &desc_imm).unwrap();
@@ -722,10 +789,13 @@ mod tests {
             &desc_out,
         )
         .unwrap();
+        let op_reduce =
+            ReductionOpDescriptor::new(ReductionMode::Add, &desc_imm, &desc_reduced).unwrap();
 
         let graph = OperationGraph::builder()
             .with_op(op_matmul)
             .with_op(op_cos)
+            .with_op(op_reduce)
             .build(&cx)
             .unwrap();
 
@@ -737,6 +807,7 @@ mod tests {
         let mut dev_a = cuda.device().htod_copy(mat_a.to_vec()).unwrap();
         let mut dev_b = cuda.device().htod_copy(mat_b.to_vec()).unwrap();
         let mut dev_c = cuda.device().alloc_zeros::<f32>(size * size).unwrap();
+        let mut dev_reduced = cuda.device().alloc_zeros::<f32>(1).unwrap();
 
         let workspace = cuda
             .device()
@@ -748,6 +819,10 @@ mod tests {
                 .with_tensor(desc_a.id(), *dev_a.device_ptr_mut() as *mut c_void)
                 .with_tensor(desc_b.id(), *dev_b.device_ptr_mut() as *mut c_void)
                 .with_tensor(desc_out.id(), *dev_c.device_ptr_mut() as *mut c_void)
+                .with_tensor(
+                    desc_reduced.id(),
+                    *dev_reduced.device_ptr_mut() as *mut c_void,
+                )
                 .build(*workspace.device_ptr() as *mut c_void)
                 .unwrap();
             engine.execute(&varpack).unwrap();
@@ -758,11 +833,17 @@ mod tests {
         let mat_a = vec2mat(&mat_a);
         let mat_b = vec2mat(&mat_b);
         let mut expected = mat2vec(&(mat_a * mat_b));
+
+        let expected_sum = expected.iter().copied().sum::<f32>();
+
         expected.iter_mut().for_each(|x| *x = x.cos());
 
         // cuDNN uses tensorfloat32 precision for matmul (13 fewer bits
         // in the mantissa than f32), so we need to do the comparison with a high epsilon.
         assert_abs_diff_eq!(result.as_slice(), expected.as_slice(), epsilon = 1e-2);
+
+        let actual_sum = cuda.device().sync_reclaim(dev_reduced).unwrap()[0];
+        assert_abs_diff_eq!(actual_sum, expected_sum, epsilon = 1.0);
     }
 
     fn vec2mat(vec: &[f32]) -> Mat<f32> {
