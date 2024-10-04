@@ -555,12 +555,6 @@ impl Engine {
         plan.set_attribute(CUDNN_ATTR_EXECUTION_PLAN_ENGINE_CONFIG, config.desc)?;
         plan.finalize()?;
 
-        let plan_json = plan
-            .get_attribute_vec(CUDNN_ATTR_EXECUTION_PLAN_JSON_REPRESENTATION, || {
-                Ok(MaybeUninit::<u8>::uninit())
-            })?;
-        println!("{}", std::str::from_utf8(&plan_json).unwrap());
-
         let mut refs = graph.refs.clone();
         refs.push(graph.raw.clone());
 
@@ -691,25 +685,30 @@ mod tests {
 
         let cx = CudnnContext::new().unwrap();
 
+        let size = 64;
+
         let desc_a = TensorDescriptor::new(
             TensorKind::Concrete,
             DataType::F32,
-            &Shape::new([1, 16, 16]),
+            &Shape::new([1, size, size]),
         )
         .unwrap();
         let desc_b = TensorDescriptor::new(
             TensorKind::Concrete,
             DataType::F32,
-            &Shape::new([1, 16, 16]),
+            &Shape::new([1, size, size]),
         )
         .unwrap();
-        let desc_imm =
-            TensorDescriptor::new(TensorKind::Virtual, DataType::F32, &Shape::new([1, 16, 16]))
-                .unwrap();
+        let desc_imm = TensorDescriptor::new(
+            TensorKind::Virtual,
+            DataType::F32,
+            &Shape::new([1, size, size]),
+        )
+        .unwrap();
         let desc_out = TensorDescriptor::new(
             TensorKind::Concrete,
             DataType::F32,
-            &Shape::new([1, 16, 16]),
+            &Shape::new([1, size, size]),
         )
         .unwrap();
 
@@ -732,16 +731,16 @@ mod tests {
 
         let engine = Engine::choose_with_heuristic(&graph).unwrap();
 
-        let mat_a: Vec<f32> = (0..256).map(|_| rand::random()).collect();
-        let mat_b: Vec<f32> = (0..256).map(|_| rand::random()).collect();
+        let mat_a: Vec<f32> = (0..size * size).map(|_| rand::random()).collect();
+        let mat_b: Vec<f32> = (0..size * size).map(|_| rand::random()).collect();
 
         let mut dev_a = cuda.device().htod_copy(mat_a.to_vec()).unwrap();
         let mut dev_b = cuda.device().htod_copy(mat_b.to_vec()).unwrap();
-        let mut dev_c = cuda.device().alloc_zeros::<f32>(256).unwrap();
+        let mut dev_c = cuda.device().alloc_zeros::<f32>(size * size).unwrap();
 
         let workspace = cuda
             .device()
-            .alloc_zeros::<u8>(dbg!(engine.workspace_size().unwrap()))
+            .alloc_zeros::<u8>(engine.workspace_size().unwrap())
             .unwrap();
 
         unsafe {
@@ -761,7 +760,9 @@ mod tests {
         let mut expected = mat2vec(&(mat_a * mat_b));
         expected.iter_mut().for_each(|x| *x = x.cos());
 
-        assert_abs_diff_eq!(result.as_slice(), expected.as_slice(), epsilon = 1e-3);
+        // cuDNN uses tensorfloat32 precision for matmul (13 fewer bits
+        // in the mantissa than f32), so we need to do the comparison with a high epsilon.
+        assert_abs_diff_eq!(result.as_slice(), expected.as_slice(), epsilon = 1e-2);
     }
 
     fn vec2mat(vec: &[f32]) -> Mat<f32> {
