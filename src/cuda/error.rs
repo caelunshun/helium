@@ -14,6 +14,4 @@ pub enum CudaError {
     CompileKernel(#[from] CompileError),
     #[error(transparent)]
     Cudnn(#[from] CudnnError),
-    #[error("{0}")]
-    Other(String),
 }

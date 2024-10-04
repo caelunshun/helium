@@ -11,7 +11,6 @@ use cudarc::cudnn::{
 };
 use std::{
     ffi::c_void,
-    iter, mem,
     mem::MaybeUninit,
     ptr,
     sync::{atomic::AtomicU64, Arc},
@@ -63,12 +62,6 @@ impl RawDescriptor {
         Ok(Self { desc })
     }
 
-    pub fn into_inner(self) -> cudnnBackendDescriptor_t {
-        let desc = self.desc;
-        mem::forget(self);
-        desc
-    }
-
     pub fn set_attribute<A: Attribute>(
         &mut self,
         name: cudnnBackendAttributeName_t,
@@ -113,46 +106,6 @@ impl RawDescriptor {
                 .result()?;
             Ok(val.assume_init())
         }
-    }
-
-    pub fn get_attribute_vec<A: Attribute>(
-        &self,
-        name: cudnnBackendAttributeName_t,
-        init: impl Fn() -> Result<MaybeUninit<A>, CudaError>,
-    ) -> Result<Vec<A>, CudaError> {
-        let mut count = 0;
-        unsafe {
-            lib().cudnnBackendGetAttribute(
-                self.desc,
-                name,
-                A::attrib_type(),
-                0,
-                &mut count,
-                ptr::null_mut(),
-            );
-        };
-
-        let mut values = iter::repeat_with(init)
-            .take(count.try_into().unwrap())
-            .collect::<Result<Vec<MaybeUninit<A>>, CudaError>>()?;
-        let mut actual_count = 0;
-        unsafe {
-            lib()
-                .cudnnBackendGetAttribute(
-                    self.desc,
-                    name,
-                    A::attrib_type(),
-                    count,
-                    &mut actual_count,
-                    values.as_mut_ptr() as *mut _,
-                )
-                .result()?;
-        }
-        values.truncate(actual_count.try_into().unwrap());
-        Ok(values
-            .into_iter()
-            .map(|val| unsafe { val.assume_init() })
-            .collect())
     }
 
     pub fn finalize(&mut self) -> Result<(), CudaError> {
@@ -256,12 +209,6 @@ unsafe impl Attribute for cudnnBackendHeurMode_t {
     }
 }
 
-unsafe impl Attribute for u8 {
-    fn attrib_type() -> cudnnBackendAttributeType_t {
-        CUDNN_TYPE_CHAR
-    }
-}
-
 pub struct TensorDescriptor(Arc<RawDescriptor>, TensorUid);
 
 impl TensorDescriptor {
@@ -278,10 +225,7 @@ impl TensorDescriptor {
             CUDNN_ATTR_TENSOR_DIMENSIONS,
             make_shape_vec(shape).as_slice(),
         )?;
-        desc.set_attribute_slice(
-            CUDNN_ATTR_TENSOR_STRIDES,
-            dbg!(compute_strides(shape).as_slice()),
-        )?;
+        desc.set_attribute_slice(CUDNN_ATTR_TENSOR_STRIDES, compute_strides(shape).as_slice())?;
         desc.set_attribute(CUDNN_ATTR_TENSOR_UNIQUE_ID, id.0)?;
         desc.set_attribute(CUDNN_ATTR_TENSOR_DATA_TYPE, convert_data_type(data_type))?;
         desc.set_attribute(CUDNN_ATTR_TENSOR_BYTE_ALIGNMENT, 16u64)?;
@@ -379,7 +323,6 @@ impl PointwiseOpDescriptor {
     ) -> Result<Self, CudaError> {
         let mut pointwise = RawDescriptor::new(CUDNN_BACKEND_POINTWISE_DESCRIPTOR)?;
         pointwise.set_attribute(CUDNN_ATTR_POINTWISE_MODE, mode.to_cudnn())?;
-        pointwise.set_attribute(CUDNN_ATTR_POINTWISE_MATH_PREC, convert_data_type(precision))?;
         pointwise.finalize()?;
 
         let mut op = RawDescriptor::new(CUDNN_BACKEND_OPERATION_POINTWISE_DESCRIPTOR)?;
@@ -499,7 +442,7 @@ impl OperationGraphBuilder {
         self
     }
 
-    pub fn build(self, cx: &CudnnContext) -> Result<OperationGraph, CudaError> {
+    pub fn build(mut self, cx: &CudnnContext) -> Result<OperationGraph, CudaError> {
         let mut desc = RawDescriptor::new(CUDNN_BACKEND_OPERATIONGRAPH_DESCRIPTOR)?;
         desc.set_attribute(CUDNN_ATTR_OPERATIONGRAPH_HANDLE, cx.0.handle)?;
         desc.set_attribute_slice(CUDNN_ATTR_OPERATIONGRAPH_OPS, &self.ops)?;
@@ -531,39 +474,18 @@ impl Engine {
         )?;
         heuristic.finalize()?;
 
-        let configs = heuristic.get_attribute_vec::<cudnnBackendDescriptor_t>(
-            CUDNN_ATTR_ENGINEHEUR_RESULTS,
-            || {
-                RawDescriptor::new(CUDNN_BACKEND_ENGINECFG_DESCRIPTOR)
-                    .map(RawDescriptor::into_inner)
-                    .map(MaybeUninit::new)
-            },
-        )?;
-        if configs.is_empty() {
-            return Err(CudaError::Other("no engine configs available".to_string()));
-        }
-        let config = configs[0];
+        let config =
+            heuristic.get_attribute::<cudnnBackendDescriptor_t>(CUDNN_ATTR_ENGINEHEUR_RESULTS)?;
         let config = RawDescriptor { desc: config };
 
-        let engine = config
-            .get_attribute_vec::<cudnnBackendDescriptor_t>(CUDNN_ATTR_ENGINECFG_ENGINE, || {
-                RawDescriptor::new(CUDNN_BACKEND_ENGINE_DESCRIPTOR)
-                    .map(RawDescriptor::into_inner)
-                    .map(MaybeUninit::new)
-            })?
-            .remove(0);
+        let engine =
+            config.get_attribute::<cudnnBackendDescriptor_t>(CUDNN_ATTR_ENGINECFG_ENGINE)?;
         let engine = RawDescriptor { desc: engine };
 
         let mut plan = RawDescriptor::new(CUDNN_BACKEND_EXECUTION_PLAN_DESCRIPTOR)?;
         plan.set_attribute(CUDNN_ATTR_EXECUTION_PLAN_HANDLE, graph.cx.handle)?;
         plan.set_attribute(CUDNN_ATTR_EXECUTION_PLAN_ENGINE_CONFIG, config.desc)?;
         plan.finalize()?;
-
-        let plan_json = plan
-            .get_attribute_vec(CUDNN_ATTR_EXECUTION_PLAN_JSON_REPRESENTATION, || {
-                Ok(MaybeUninit::<u8>::uninit())
-            })?;
-        println!("{}", std::str::from_utf8(&plan_json).unwrap());
 
         let mut refs = graph.refs.clone();
         refs.push(graph.raw.clone());
@@ -668,7 +590,6 @@ fn compute_strides(shape: &Shape) -> Vec<u64> {
         *stride = product;
         product *= dim as u64;
     }
-    strides.reverse();
     strides
 }
 
@@ -684,43 +605,33 @@ mod tests {
     fn test_compute_strides() {
         assert_eq!(
             compute_strides(&Shape::new([1, 2, 3, 4])),
-            vec![24, 12, 4, 1],
+            vec![1, 4, 12, 24],
         );
     }
 
     #[test]
     fn execute_matmul() {
         let cuda = CudaContext::new(0).unwrap();
-        cuda.device().bind_to_thread().unwrap();
 
         let cx = CudnnContext::new().unwrap();
 
-        let desc_a = TensorDescriptor::new(
-            TensorKind::Concrete,
-            DataType::F32,
-            &Shape::new([1, 16, 16]),
-        )
-        .unwrap();
-        let desc_b = TensorDescriptor::new(
-            TensorKind::Concrete,
-            DataType::F32,
-            &Shape::new([1, 16, 16]),
-        )
-        .unwrap();
-        let desc_imm =
-            TensorDescriptor::new(TensorKind::Virtual, DataType::F32, &Shape::new([1, 16, 16]))
+        let desc_a =
+            TensorDescriptor::new(TensorKind::Concrete, DataType::F32, &Shape::new([16, 16]))
                 .unwrap();
-        let desc_out = TensorDescriptor::new(
-            TensorKind::Concrete,
-            DataType::F32,
-            &Shape::new([1, 16, 16]),
-        )
-        .unwrap();
+        let desc_b =
+            TensorDescriptor::new(TensorKind::Concrete, DataType::F32, &Shape::new([16, 16]))
+                .unwrap();
+        let desc_imm =
+            TensorDescriptor::new(TensorKind::Virtual, DataType::F32, &Shape::new([16, 16]))
+                .unwrap();
+        let desc_out =
+            TensorDescriptor::new(TensorKind::Concrete, DataType::F32, &Shape::new([16, 16]))
+                .unwrap();
 
         let op_matmul =
             MatmulOpDescriptor::new(DataType::F32, &desc_a, &desc_b, &desc_imm).unwrap();
-        let op_cos = PointwiseOpDescriptor::new(
-            PointwiseMode::Cos,
+        let op_scale = PointwiseOpDescriptor::new(
+            PointwiseMode::Neg,
             DataType::F32,
             &desc_imm,
             None,
@@ -732,7 +643,7 @@ mod tests {
 
         let graph = OperationGraph::builder()
             .with_op(op_matmul)
-            .with_op(op_cos)
+            .with_op(op_scale)
             .build(&cx)
             .unwrap();
 
@@ -764,10 +675,9 @@ mod tests {
 
         let mat_a = vec2mat(&mat_a);
         let mat_b = vec2mat(&mat_b);
-        let mut expected = mat2vec(&(mat_a * mat_b));
-        expected.iter_mut().for_each(|x| *x = x.cos());
+        let expected = mat2vec(&(mat_a * mat_b));
 
-        assert_ulps_eq!(result.as_slice(), expected.as_slice(), max_ulps = 20);
+        assert_ulps_eq!(result.as_slice(), expected.as_slice());
     }
 
     fn vec2mat(vec: &[f32]) -> Mat<f32> {

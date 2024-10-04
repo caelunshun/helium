@@ -23,7 +23,7 @@ optional = true
 default-features = false
 features = [
     "std",
-    "cuda-12060",
+    "cuda-12050",
     "driver",
     "cublas",
     "cublaslt",
