@@ -37,13 +37,8 @@ features = [
 [dev-dependencies]
 insta = "1"
 approx = "0.5"
-rand = "0.8"
-faer = "0.19"
 
 [features]
 default = ["cpu", "cuda"]
 cuda = ["dep:cudarc", "dep:indoc", "dep:thread_local", "dep:bumpalo"]
 cpu = ["dep:gemm", "dep:sleef", "dep:rayon"]
-
-[profile.dev]
-opt-level = 1

@@ -1,0 +1,22 @@
+---
+source: src/cuda/kernel/pointwise.rs
+expression: kernel.code
+---
+#include <cuda_fp16.h>
+#include <cuda_bf16.h>
+
+typedef unsigned int uint32_t;
+
+extern "C" __global__ void generatedPointwiseKernel(nv_bfloat16 *ident0, float *ident2, float ident4, half *ident10,  uint32_t size) {
+    uint32_t index = threadIdx.x + blockIdx.x * blockDim.x;
+    if (index >= size) return;
+    float ident1 = ident0[index];
+float ident3 = ident2[index];
+float ident5 = __frcp_rn(ident1);
+float ident6 = powf(ident5, ident4);
+float ident7 = powf(ident1, ident3);
+float ident8 = ident7 * ident6;
+float ident9 = ident8;
+ident10[index] = static_cast<half>(ident9);
+
+}
