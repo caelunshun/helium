@@ -1,4 +1,4 @@
 mod allocator;
 pub mod context;
-mod cudnn_wrapper;
+mod cudnn;
 pub mod error;
