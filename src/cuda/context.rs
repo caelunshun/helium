@@ -1,24 +1,13 @@
-use crate::{
-    cuda::{
-        error::CudaError,
-        kernel::{CompiledKernel, Kernel, KernelParam},
-    },
-    data_type::DataType,
-    opgraph::{op::Op, subgraph::OpSubgraph, Intermediate, Node, NodeId},
-};
-use ahash::AHashMap;
+use crate::cuda::error::CudaError;
 use cudarc::{
-    cublaslt,
-    cublaslt::sys::cublasLtHandle_t,
     driver,
     driver::{
         sys::{CUmemPool_attribute_enum, CUstream},
         CudaDevice,
     },
 };
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use std::{
-    collections::{hash_map::Entry, BTreeMap},
     iter, ptr,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -31,9 +20,6 @@ use thread_local::ThreadLocal;
 pub struct CudaContext {
     device: Arc<CudaDevice>,
     stream_pool: ThreadLocal<Vec<CudaStream>>,
-    cublaslt_pool: ThreadLocal<CublasLtContext>,
-    /// Maps subgraphs to compiled + loaded kernels.
-    kernel_cache: Mutex<AHashMap<OpSubgraph, Arc<LoadedKernel>>>,
     next_module_id: AtomicU64,
 }
 
@@ -77,8 +63,6 @@ impl CudaContext {
         Ok(Self {
             device,
             stream_pool: ThreadLocal::new(),
-            cublaslt_pool: ThreadLocal::new(),
-            kernel_cache: Mutex::new(AHashMap::new()),
             next_module_id: AtomicU64::new(0),
         })
     }
@@ -96,10 +80,6 @@ impl CudaContext {
             .map(Vec::as_slice)
     }
 
-    pub fn cublaslt_handle(&self) -> Result<&CublasLtContext, CudaError> {
-        self.cublaslt_pool.get_or_try(|| CublasLtContext::new())
-    }
-
     pub fn device(&self) -> &Arc<CudaDevice> {
         &self.device
     }
@@ -107,73 +87,6 @@ impl CudaContext {
     fn new_module_id(&self) -> String {
         let id = self.next_module_id.fetch_add(1, Ordering::Relaxed);
         format!("module{id}")
-    }
-
-    pub fn get_or_init_kernel(
-        &self,
-        subgraph: &OpSubgraph,
-        generate_kernel: impl FnOnce() -> Kernel,
-    ) -> Result<Arc<LoadedKernel>, CudaError> {
-        match self.kernel_cache.lock().entry(subgraph.clone()) {
-            Entry::Occupied(entry) => Ok(entry.get().clone()),
-            Entry::Vacant(entry) => {
-                let kernel = generate_kernel();
-                let kernel = CompiledKernel::new(&kernel, &self.device)?;
-                let module_id = self.new_module_id();
-                self.device.load_ptx(
-                    kernel.ptx().clone(),
-                    &module_id,
-                    &[kernel.entrypoint_name()],
-                )?;
-
-                let mut output_types = BTreeMap::new();
-                for param in kernel.params() {
-                    if let KernelParam::Output(node) = param {
-                        output_types
-                            .insert(node, subgraph.graph().get(node).descriptor().data_type);
-                    }
-                }
-
-                Ok(entry
-                    .insert(Arc::new(LoadedKernel {
-                        params: kernel.params().collect(),
-                        module_name: module_id,
-                        func_name: kernel.entrypoint_name(),
-                        output_types,
-                        reduction_output: subgraph.leafs().find(|id| {
-                            matches!(
-                                subgraph.graph().get(*id),
-                                Node::Intermediate(Intermediate {
-                                    op: Op::Reduce(_),
-                                    ..
-                                })
-                            )
-                        }),
-                    }))
-                    .clone())
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct LoadedKernel {
-    pub params: Vec<KernelParam>,
-    pub module_name: String,
-    pub func_name: &'static str,
-    pub output_types: BTreeMap<NodeId, DataType>,
-    pub reduction_output: Option<NodeId>,
-}
-
-impl LoadedKernel {
-    pub fn first_tensor_input(&self) -> NodeId {
-        self.params
-            .iter()
-            .find_map(|p| match p {
-                KernelParam::Node(n) => Some(*n),
-                _ => None,
-            })
-            .expect("kernel has no tensor inputs")
     }
 }
 
@@ -199,18 +112,3 @@ impl CudaStream {
 }
 
 unsafe impl Send for CudaStream {}
-
-pub struct CublasLtContext(cublasLtHandle_t);
-
-impl CublasLtContext {
-    pub fn new() -> Result<Self, CudaError> {
-        let cx = cublaslt::result::create_handle()?;
-        Ok(Self(cx))
-    }
-
-    pub fn raw(&self) -> cublasLtHandle_t {
-        self.0
-    }
-}
-
-unsafe impl Send for CublasLtContext {}

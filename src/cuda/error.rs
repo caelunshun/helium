@@ -1,5 +1,4 @@
 use cudarc::{
-    cublaslt::result::CublasError,
     cudnn::CudnnError,
     driver::DriverError,
     nvrtc::{result::NvrtcError, CompileError},
@@ -13,8 +12,6 @@ pub enum CudaError {
     Nvrtc(#[from] NvrtcError),
     #[error(transparent)]
     CompileKernel(#[from] CompileError),
-    #[error(transparent)]
-    Cublas(#[from] CublasError),
     #[error(transparent)]
     Cudnn(#[from] CudnnError),
 }
