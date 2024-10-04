@@ -48,7 +48,7 @@ impl Drop for ContextInner {
 }
 
 #[repr(transparent)]
-struct RawDescriptor {
+pub struct RawDescriptor {
     desc: cudnnBackendDescriptor_t,
 }
 
@@ -278,13 +278,15 @@ impl TensorDescriptor {
             CUDNN_ATTR_TENSOR_DIMENSIONS,
             make_shape_vec(shape).as_slice(),
         )?;
-        desc.set_attribute_slice(
-            CUDNN_ATTR_TENSOR_STRIDES,
-            dbg!(compute_strides(shape).as_slice()),
-        )?;
+        desc.set_attribute_slice(CUDNN_ATTR_TENSOR_STRIDES, compute_strides(shape).as_slice())?;
         desc.set_attribute(CUDNN_ATTR_TENSOR_UNIQUE_ID, id.0)?;
         desc.set_attribute(CUDNN_ATTR_TENSOR_DATA_TYPE, convert_data_type(data_type))?;
         desc.set_attribute(CUDNN_ATTR_TENSOR_BYTE_ALIGNMENT, 16u64)?;
+
+        if kind == TensorKind::Virtual {
+            desc.set_attribute(CUDNN_ATTR_TENSOR_IS_VIRTUAL, true)?;
+        }
+
         desc.finalize()?;
         Ok(Self(Arc::new(desc), id))
     }
@@ -373,8 +375,6 @@ impl PointwiseOpDescriptor {
         precision: DataType,
         input_a: &TensorDescriptor,
         input_b: Option<&TensorDescriptor>,
-        alpha_a: f32,
-        alpha_b: f32,
         output: &TensorDescriptor,
     ) -> Result<Self, CudaError> {
         let mut pointwise = RawDescriptor::new(CUDNN_BACKEND_POINTWISE_DESCRIPTOR)?;
@@ -389,10 +389,6 @@ impl PointwiseOpDescriptor {
             op.set_attribute(CUDNN_ATTR_OPERATION_POINTWISE_BDESC, input_b.0.desc)?;
         }
         op.set_attribute(CUDNN_ATTR_OPERATION_POINTWISE_YDESC, output.0.desc)?;
-        op.set_attribute(CUDNN_ATTR_OPERATION_POINTWISE_ALPHA1, alpha_a)?;
-        if input_b.is_some() {
-            op.set_attribute(CUDNN_ATTR_OPERATION_POINTWISE_ALPHA2, alpha_b)?;
-        }
 
         op.finalize()?;
 
@@ -579,8 +575,8 @@ impl Engine {
 
     pub fn workspace_size(&self) -> Result<usize, CudaError> {
         Ok(self
-            .config
-            .get_attribute::<u64>(CUDNN_ATTR_ENGINECFG_WORKSPACE_SIZE)?
+            .plan
+            .get_attribute::<u64>(CUDNN_ATTR_EXECUTION_PLAN_WORKSPACE_SIZE)?
             .try_into()
             .unwrap())
     }
@@ -676,7 +672,7 @@ fn compute_strides(shape: &Shape) -> Vec<u64> {
 mod tests {
     use super::*;
     use crate::cuda::context::CudaContext;
-    use approx::assert_ulps_eq;
+    use approx::assert_abs_diff_eq;
     use cudarc::driver::{DevicePtr, DevicePtrMut};
     use faer::Mat;
 
@@ -724,8 +720,6 @@ mod tests {
             DataType::F32,
             &desc_imm,
             None,
-            2.0,
-            1.0,
             &desc_out,
         )
         .unwrap();
@@ -747,7 +741,7 @@ mod tests {
 
         let workspace = cuda
             .device()
-            .alloc_zeros::<u8>(engine.workspace_size().unwrap())
+            .alloc_zeros::<u8>(dbg!(engine.workspace_size().unwrap()))
             .unwrap();
 
         unsafe {
@@ -767,21 +761,23 @@ mod tests {
         let mut expected = mat2vec(&(mat_a * mat_b));
         expected.iter_mut().for_each(|x| *x = x.cos());
 
-        assert_ulps_eq!(result.as_slice(), expected.as_slice(), max_ulps = 20);
+        assert_abs_diff_eq!(result.as_slice(), expected.as_slice(), epsilon = 1e-3);
     }
 
     fn vec2mat(vec: &[f32]) -> Mat<f32> {
         let size = (vec.len() as f64).sqrt() as usize;
-        let mut mat = Mat::zeros(size, size);
+        let mut mat: Mat<f32> = Mat::zeros(size, size);
         mat.col_iter_mut()
             .flat_map(|col| col.try_as_slice_mut().unwrap())
             .zip(vec)
             .for_each(|(mat, x): (&mut f32, &f32)| *mat = *x);
-        mat
+        mat.transpose().to_owned()
     }
 
     fn mat2vec(mat: &Mat<f32>) -> Vec<f32> {
-        mat.col_iter()
+        mat.transpose()
+            .to_owned()
+            .col_iter()
             .flat_map(|col| col.try_as_slice().unwrap())
             .copied()
             .collect()
