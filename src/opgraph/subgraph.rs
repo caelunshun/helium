@@ -1,4 +1,4 @@
-use crate::opgraph::{Intermediate, Node, NodeId, OpGraph, VarId};
+use crate::opgraph::{NodeId, OpGraph};
 use std::{
     hash::{Hash, Hasher},
     sync::Arc,
@@ -68,20 +68,6 @@ impl OpSubgraph {
             .iter()
             .filter(|&&prev| self.contains_node(prev))
             .count()
-    }
-
-    pub fn referenced_vars(&self) -> impl Iterator<Item = VarId> + '_ {
-        let mut vars = Vec::new();
-        for node in self.nodes() {
-            if let Node::Intermediate(Intermediate { op, .. }) = self.graph.get(node) {
-                for var in op.referenced_vars() {
-                    if !vars.contains(&var) {
-                        vars.push(var);
-                    }
-                }
-            }
-        }
-        vars.into_iter()
     }
 
     pub fn graph(&self) -> &Arc<OpGraph> {

@@ -1,14 +1,6 @@
-use crate::{
-    data_type::{DataType, DataVec},
-    opgraph::op::Op,
-    shape::Shape,
-};
-use ahash::AHashMap;
+use crate::{data_type::DataType, opgraph::op::Op, shape::Shape};
 use slotmap::{SecondaryMap, SlotMap};
-use std::{
-    fmt::{Debug, Formatter},
-    sync::atomic::AtomicU64,
-};
+use std::fmt::{Debug, Formatter};
 
 pub mod op;
 pub mod subgraph;
@@ -20,16 +12,6 @@ pub struct OpGraph {
     inputs: Vec<NodeId>,
     outbound_edges: SecondaryMap<NodeId, Vec<NodeId>>,
     inbound_edges: SecondaryMap<NodeId, Vec<NodeId>>,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub struct VarId(u64);
-
-impl VarId {
-    pub fn new() -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        VarId(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
-    }
 }
 
 impl OpGraph {
@@ -115,6 +97,19 @@ impl OpGraph {
         self.nodes.keys()
     }
 
+    pub fn remove(&mut self, id: NodeId) {
+        self.nodes.remove(id).unwrap();
+        for pred in &self.inbound_edges[id] {
+            remove_element(&mut self.outbound_edges[*pred], id);
+        }
+        for suc in &self.outbound_edges[id] {
+            remove_element(&mut self.inbound_edges[*suc], id);
+        }
+
+        remove_element(&mut self.inputs, id);
+        remove_element(&mut self.outputs, id);
+    }
+
     pub fn get(&self, id: NodeId) -> &Node {
         &self.nodes[id]
     }
@@ -148,6 +143,35 @@ impl OpGraph {
     pub fn is_input(&self, id: NodeId) -> bool {
         self.inputs.contains(&id)
     }
+
+    /// Removes unused operations and inputs.
+    pub fn optimize(&mut self) {
+        self.prune_unused();
+    }
+
+    fn prune_unused(&mut self) {
+        let mut visited_nodes = SecondaryMap::<NodeId, ()>::default();
+
+        let mut stack = self.outputs.clone();
+        while let Some(node) = stack.pop() {
+            visited_nodes.insert(node, ());
+
+            for &pred in self.inbound_edges(node) {
+                if !visited_nodes.contains_key(pred) {
+                    stack.push(pred);
+                }
+            }
+        }
+
+        let to_remove: Vec<NodeId> = self
+            .nodes
+            .keys()
+            .filter(|&id| !visited_nodes.contains_key(id))
+            .collect();
+        for node in to_remove {
+            self.remove(node);
+        }
+    }
 }
 
 impl Debug for OpGraph {
@@ -165,6 +189,13 @@ impl Debug for OpGraph {
 fn push_if_absent<T: Eq>(vec: &mut Vec<T>, val: T) {
     if !vec.contains(&val) {
         vec.push(val);
+    }
+}
+
+fn remove_element<T: Eq>(vec: &mut Vec<T>, val: T) {
+    let pos = vec.iter().position(|x| x == &val);
+    if let Some(pos) = pos {
+        vec.swap_remove(pos);
     }
 }
 
@@ -206,48 +237,4 @@ pub struct Input {
 pub struct Intermediate {
     pub descriptor: Descriptor,
     pub op: Op,
-}
-
-/// Maps VarId to their values.
-#[derive(Debug, Clone, Default)]
-pub struct VarMap(AHashMap<VarId, Var>);
-
-impl VarMap {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn insert(&mut self, var_id: VarId, value: Var) {
-        self.0.insert(var_id, value);
-    }
-
-    pub fn get(&self, var_id: VarId) -> &Var {
-        &self.0[&var_id]
-    }
-
-    pub fn drain(&mut self) -> impl Iterator<Item = (VarId, Var)> + '_ {
-        self.0.drain()
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum Var {
-    Scalar(f32),
-    Tensor(DataVec, Shape),
-}
-
-impl Var {
-    pub fn expect_scalar(&self) -> f32 {
-        match self {
-            Var::Scalar(x) => *x,
-            _ => panic!("not a scalar"),
-        }
-    }
-
-    pub fn expect_tensor(&self) -> (&DataVec, &Shape) {
-        match self {
-            Var::Tensor(data, shape) => (data, shape),
-            _ => panic!("not a tensor"),
-        }
-    }
 }

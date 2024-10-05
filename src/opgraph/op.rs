@@ -1,9 +1,10 @@
 use crate::{
-    data_type::DataType,
-    opgraph::{Descriptor, NodeId, VarId},
+    data_type::{DataType, DataVec},
+    opgraph::{Descriptor, NodeId},
     shape::Shape,
 };
 use slotmap::SecondaryMap;
+use std::hash::{Hash, Hasher};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Op {
@@ -30,20 +31,6 @@ impl Op {
             Op::UploadTensor(_) => vec![],
             Op::Restructure(op) => vec![op.input],
             Op::Reshape(op) => vec![op.input],
-        }
-    }
-
-    pub fn referenced_vars(&self) -> Vec<VarId> {
-        match self {
-            Op::UnaryPointwise(UnaryPointwise {
-                op:
-                    UnaryPointwiseOp::AddScalar(var)
-                    | UnaryPointwiseOp::MulScalar(var)
-                    | UnaryPointwiseOp::PowScalar(var),
-                ..
-            }) => vec![*var],
-            Op::UploadTensor(op) => vec![op.data_var],
-            _ => vec![],
         }
     }
 
@@ -204,9 +191,6 @@ pub struct UnaryPointwise {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum UnaryPointwiseOp {
-    AddScalar(VarId),
-    MulScalar(VarId),
-    PowScalar(VarId),
     Recip,
     Neg,
     Exp,
@@ -233,6 +217,8 @@ pub enum BinaryPointwiseOp {
     Mul,
     /// `lhs^rhs`
     Pow,
+    Min,
+    Max,
 }
 
 /// Cast tensor to a new precision.
@@ -274,10 +260,24 @@ impl ReduceOp {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub struct UploadTensor {
-    pub data_var: VarId,
+    pub data: DataVec,
     pub descriptor: Descriptor,
+}
+
+impl PartialEq for UploadTensor {
+    fn eq(&self, other: &Self) -> bool {
+        self.descriptor == other.descriptor
+    }
+}
+
+impl Eq for UploadTensor {}
+
+impl Hash for UploadTensor {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.descriptor.hash(state);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
