@@ -1,13 +1,14 @@
 use crate::{
+    backend::{Backend, BackendExt},
     data_type::{DataType, DataTypeConversion},
     device::Device,
     opgraph::{
         op,
         op::{
-            BinaryPointwise, BinaryPointwiseOp, BroadcastAxis, Op, Reduce, ReduceOp, RestrctureOp,
+            BinaryPointwise, BinaryPointwiseOp, BroadcastAxis, Op, Reduce, ReduceOp,
             UnaryPointwise, UnaryPointwiseOp,
         },
-        Descriptor, NodeId, OpGraph, Var, VarId, VarMap,
+        Descriptor, NodeId, OpGraph,
     },
     shape::Shape,
 };
@@ -48,14 +49,9 @@ impl<const D: usize> Tensor<D> {
 
         let mut builder = builder.lock();
 
-        let data_var = VarId::new();
-        builder.vars.insert(
-            data_var,
-            Var::Tensor(T::into_data_vec(vec), Shape::new(shape)),
-        );
         let node = builder.new_op(
             Op::UploadTensor(op::UploadTensor {
-                data_var,
+                data: T::into_data_vec(vec),
                 descriptor: Descriptor {
                     shape: Shape::new(shape),
                     data_type: T::data_type(),
@@ -88,7 +84,7 @@ impl<const D: usize> Tensor<D> {
         };
         match data {
             #[cfg(feature = "cuda")]
-            ConcreteData::Cuda(tensor) => cuda::tensor_to_vec(tensor),
+            ConcreteData::Cuda(_, tensor) => crate::cuda::Cuda.tensor_to_vec(tensor),
             #[cfg(feature = "cpu")]
             ConcreteData::Cpu => todo!(),
         }
@@ -128,7 +124,7 @@ impl<const D: usize> Tensor<D> {
         self.op_unary_pointwise(UnaryPointwiseOp::Recip)
     }
 
-    /// Column-major matrix multiplication.
+    /// Row-major matrix multiplication.
     pub fn matmul(self, rhs: Self) -> Self {
         const {
             if D < 2 {
@@ -186,70 +182,71 @@ impl<const D: usize> Tensor<D> {
         Self::from_op(&cx, Op::Transpose(op::Transpose { input: this }))
     }
 
-    /// Broadcasts the given dimension, which must be of size 1.
-    pub fn broadcast(self, axis: i32, new_size: usize) -> Self {
-        let (cx, this) = self.make_graph();
+    /// Broadcasts the tensor to the given shape.
+    ///
+    /// Dimensions of the output must match dimensions of `self`
+    /// except where the `self` dimension is of size 1.
+    pub fn broadcast_to<const D2: usize>(self, new_shape: [usize; D2]) -> Tensor<D2> {
+        if &new_shape[..] == &self.shape()[..] {
+            // No need for broadcast, optimize out by returning
+            // `self`.
+            return Tensor {
+                inner: self.inner,
+                device: self.device,
+            };
+        }
 
-        let axis = Self::axis_to_unsigned(axis);
-
-        assert!(new_size > 0, "must broadcast to a positive size");
-        assert_eq!(
-            self.shape()[axis],
-            1,
-            "can only broadcast an axis of size 1"
+        assert!(
+            new_shape.iter().all(|&x| x != 0),
+            "dimension cannot be of size zero"
         );
 
-        Self::from_op(
-            &cx,
-            Op::Restructure(op::Restructure {
-                input: this,
-                op: RestrctureOp::BroadcastAxis {
-                    axis: BroadcastAxis::Existing(axis),
-                    new_size,
-                },
-            }),
-        )
-    }
+        let mut broadcast_axes = Vec::new();
 
-    /// Expands the tensor size by 1 dimension.
-    pub fn expand<const D2: usize>(self, new_axis_size: usize) -> Tensor<D2> {
-        const {
-            if D2 != D + 1 {
-                panic!("output tensor must have exactly one additional dimension");
+        for (reverse_index, (old, new)) in self
+            .shape()
+            .into_iter()
+            .rev()
+            .zip(new_shape.into_iter().rev())
+            .enumerate()
+        {
+            let index = D2 - reverse_index - 1;
+            if old != 1 {
+                assert_eq!(
+                    old, new,
+                    "cannot broadcast axis {index} that is not of size 1 (actual size is {old})"
+                );
+            }
+
+            if old == 1 && new != 1 {
+                broadcast_axes.push(BroadcastAxis::new(index, new));
+            }
+        }
+        if D2 > D {
+            for i in 0..(D2 - D) {
+                broadcast_axes.push(BroadcastAxis::new(i, new_shape[i]));
             }
         }
 
-        assert!(new_axis_size > 0, "must broadcast to a positive size");
-
         let (cx, this) = self.make_graph();
-
         Tensor::from_op(
             &cx,
-            Op::Restructure(op::Restructure {
+            Op::Broadcast(op::Broadcast {
                 input: this,
-                op: RestrctureOp::BroadcastAxis {
-                    axis: BroadcastAxis::Expand,
-                    new_size: new_axis_size,
-                },
+                new_dim_count: D2,
+                broadcast_axes,
             }),
         )
     }
 
-    /// Converts Python-style dimension indexes to usize.
-    const fn axis_to_unsigned(i: i32) -> usize {
-        let result = if i < 0 {
-            D - ((-i) as usize)
-        } else {
-            i as usize
-        };
-        if result >= D {
-            panic!("axis index out of bounds");
-        }
-        result
+    pub fn pow(self, other: Self) -> Self {
+        self.broadcast_to(other.shape())
+            .op_binary_pointwise(&other, BinaryPointwiseOp::Pow)
     }
 
     pub fn pow_scalar(self, power: f32) -> Self {
-        self.op_unary_pointwise_scalar(UnaryPointwiseOp::PowScalar, power)
+        let rhs = Tensor::from_scalar(power, self.device).broadcast_to(self.shape());
+        self.pow(rhs)
     }
 
     /// Performs sum reduction along the last `depth` dimensions
@@ -392,7 +389,8 @@ impl<const D: usize> Add<f32> for Tensor<D> {
     type Output = Tensor<D>;
 
     fn add(self, rhs: f32) -> Self::Output {
-        self.op_unary_pointwise_scalar(UnaryPointwiseOp::AddScalar, rhs)
+        let rhs = Tensor::from_scalar(rhs, self.device).broadcast_to(self.shape());
+        self + rhs
     }
 }
 
@@ -423,7 +421,8 @@ impl<const D: usize> Mul<f32> for Tensor<D> {
     type Output = Tensor<D>;
 
     fn mul(self, rhs: f32) -> Self::Output {
-        self.op_unary_pointwise_scalar(UnaryPointwiseOp::MulScalar, rhs)
+        let rhs = Tensor::from_scalar(rhs, self.device).broadcast_to(self.shape());
+        self * rhs
     }
 }
 
@@ -535,23 +534,6 @@ impl<const D: usize> Tensor<D> {
         Tensor::from_op(&cx, Op::UnaryPointwise(UnaryPointwise { input: this, op }))
     }
 
-    fn op_unary_pointwise_scalar(
-        &self,
-        op: impl Fn(VarId) -> UnaryPointwiseOp,
-        value: f32,
-    ) -> Self {
-        let (cx, this) = self.make_graph();
-        let var = VarId::new();
-        cx.lock().vars.insert(var, Var::Scalar(value));
-        Tensor::from_op(
-            &cx,
-            Op::UnaryPointwise(UnaryPointwise {
-                input: this,
-                op: op(var),
-            }),
-        )
-    }
-
     fn op_reduce<const D2: usize>(&self, op: ReduceOp, depth: u32) -> Tensor<D2> {
         assert_eq!(
             D2,
@@ -587,12 +569,7 @@ impl TensorInner {
     pub fn shape(&self) -> Shape {
         match &self.data {
             Data::Virtual(virt) => virt.shape(),
-            Data::Concrete(conc) => match conc {
-                #[cfg(feature = "cuda")]
-                ConcreteData::Cuda(tensor) => tensor.shape().clone(),
-                #[cfg(feature = "cpu")]
-                ConcreteData::Cpu => todo!(),
-            },
+            Data::Concrete(conc) => conc.shape().clone(),
         }
     }
 
@@ -601,7 +578,7 @@ impl TensorInner {
             Data::Virtual(virt) => virt.data_type,
             Data::Concrete(conc) => match conc {
                 #[cfg(feature = "cuda")]
-                ConcreteData::Cuda(tensor) => tensor.data_type(),
+                ConcreteData::Cuda(_, tensor) => tensor.data_type(),
                 #[cfg(feature = "cpu")]
                 ConcreteData::Cpu => todo!(),
             },
@@ -643,7 +620,7 @@ impl VirtualData {
 
 enum ConcreteData {
     #[cfg(feature = "cuda")]
-    Cuda(crate::cuda::tensor::RawTensor),
+    Cuda(Shape, <crate::cuda::Cuda as Backend>::TensorStorage),
     #[cfg(feature = "cpu")]
     #[expect(unused)]
     Cpu,
@@ -652,7 +629,7 @@ enum ConcreteData {
 impl ConcreteData {
     fn shape(&self) -> &Shape {
         match self {
-            ConcreteData::Cuda(x) => x.shape(),
+            ConcreteData::Cuda(shape, _) => shape,
             ConcreteData::Cpu => todo!(),
         }
     }
@@ -663,9 +640,8 @@ type OpGraphBuilderHandle = Arc<Mutex<OpGraphBuilder>>;
 struct OpGraphBuilder {
     device: Device,
     op_graph: OpGraph,
-    inputs: SecondaryMap<NodeId, Arc<Mutex<Tenspub mod execution;orInner>>>,
+    inputs: SecondaryMap<NodeId, Arc<Mutex<TensorInner>>>,
     node_to_tensor: SecondaryMap<NodeId, Weak<Mutex<TensorInner>>>,
-    vars: VarMap,
 }
 
 impl OpGraphBuilder {
@@ -675,7 +651,6 @@ impl OpGraphBuilder {
             op_graph: OpGraph::new(),
             inputs: SecondaryMap::default(),
             node_to_tensor: SecondaryMap::default(),
-            vars: VarMap::new(),
         }
     }
 
@@ -700,10 +675,6 @@ impl OpGraphBuilder {
         for (old_input_id, tensor) in &self.inputs {
             let new_input_id = node_mapping[old_input_id];
             other.inputs.insert(new_input_id, Arc::clone(tensor));
-        }
-
-        for (var, value) in self.vars.drain() {
-            other.vars.insert(var, value);
         }
     }
 
@@ -737,52 +708,35 @@ impl OpGraphBuilder {
 
         match &self.device {
             #[cfg(feature = "cuda")]
-            Device::Cuda(device_index) => cuda::resolve(self, *device_index),
+            Device::Cuda(device_index) => {
+                let mut inputs = SecondaryMap::default();
+                for &node_id in self.op_graph.inputs() {
+                    let tensor = self.node_to_tensor[node_id]
+                        .upgrade()
+                        .expect("tensor is referenced as input to graph, but no longer alive?");
+                    let storage = match &tensor.lock().data {
+                        Data::Concrete(ConcreteData::Cuda(_, storage)) => storage.clone(),
+                        Data::Concrete(_) => panic!("tensor must be on CUDA device"),
+                        Data::Virtual(_) => unreachable!("input tensor must be concrete"),
+                    };
+                    inputs.insert(node_id, storage);
+                }
+
+                let storages =
+                    crate::cuda::Cuda.execute_graph(*device_index, self.op_graph.clone(), inputs);
+                for (node_id, storage) in storages {
+                    self.node_to_tensor[node_id]
+                        .upgrade()
+                        .expect("tensor is referenced as graph output, but no longer alive?")
+                        .lock()
+                        .data = Data::Concrete(ConcreteData::Cuda(
+                        self.op_graph.get(node_id).descriptor().shape.clone(),
+                        storage,
+                    ));
+                }
+            }
             #[cfg(feature = "cpu")]
             Device::Cpu => todo!(),
         }
-    }
-}
-
-#[cfg(feature = "cuda")]
-mod cuda {
-    use super::*;
-    use crate::cuda::{context::CudaContext, execution::TensorMap, tensor::RawTensor};
-
-    pub fn resolve(graph: &mut OpGraphBuilder, device_index: u32) {
-        let cx = CudaContext::global(device_index).expect("failed to create CUDA context");
-        let plan = crate::cuda::planner::compile_plan(cx, &Arc::new(graph.op_graph.clone()))
-            .expect("failed to generate plan");
-
-        let mut inputs = TensorMap::new();
-        for &input in graph.op_graph.inputs() {
-            let tensor = graph.inputs[input].lock();
-            let Data::Concrete(data) = &tensor.data else {
-                panic!("input tensor cannot be virtual")
-            };
-
-            // TODO: check device / handle multi-device
-            let ConcreteData::Cuda(data) = &data else {
-                panic!("data must reside on CUDA")
-            };
-
-            inputs.insert(input, data.clone());
-        }
-
-        let mut outputs = crate::cuda::execution::execute_plan(&plan, cx, inputs, &graph.vars)
-            .expect("failed to execute plan");
-
-        for (node, tensor) in &graph.node_to_tensor {
-            if let Some(tensor) = tensor.upgrade() {
-                let val = outputs.remove(node).unwrap();
-                tensor.lock().data = Data::Concrete(ConcreteData::Cuda(val));
-            }
-        }
-    }
-
-    pub fn tensor_to_vec<T: DataTypeConversion>(tensor: &RawTensor) -> Vec<T> {
-        tensor
-            .to_vec_sync()
-            .expect("failed to transfer data to host")
     }
 }

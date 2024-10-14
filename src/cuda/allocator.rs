@@ -4,7 +4,7 @@ use crate::cuda::{
 };
 use cudarc::{
     driver,
-    driver::sys::{CUcontext, CUdevice, CUdeviceptr},
+    driver::sys::{CUcontext, CUdeviceptr},
 };
 use parking_lot::Mutex;
 use std::{collections::BTreeMap, sync::Arc};
@@ -23,6 +23,9 @@ pub struct CudaAllocator {
 
     dropped_memories: Arc<Mutex<Vec<Block>>>,
 }
+
+unsafe impl Send for CudaAllocator {}
+unsafe impl Sync for CudaAllocator {}
 
 impl CudaAllocator {
     /// Maximum alignment that can be requested.
@@ -91,6 +94,9 @@ impl CudaAllocator {
         let size = min_size.max(Self::MIN_PAGE_SIZE).next_power_of_two();
 
         let ptr = unsafe { driver::result::malloc_sync(size.try_into().unwrap())? };
+        unsafe {
+            driver::result::memset_d8_sync(ptr, 0, size.try_into().unwrap())?;
+        }
 
         let start = self
             .pages

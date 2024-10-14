@@ -15,7 +15,7 @@ pub enum Op {
     BinaryPointwise(BinaryPointwise),
     ChangeDataType(ChangeDataType),
     Reduce(Reduce),
-    Restructure(Restructure),
+    Broadcast(Broadcast),
     Reshape(Reshape),
 }
 
@@ -29,7 +29,7 @@ impl Op {
             Op::ChangeDataType(op) => vec![op.input],
             Op::Reduce(op) => vec![op.input],
             Op::UploadTensor(_) => vec![],
-            Op::Restructure(op) => vec![op.input],
+            Op::Broadcast(op) => vec![op.input],
             Op::Reshape(op) => vec![op.input],
         }
     }
@@ -87,10 +87,15 @@ impl Op {
                     ..input
                 }
             }
-            Op::Restructure(op) => {
+            Op::Broadcast(op) => {
                 let input = get_input_descriptor(op.input);
+                let mut shape = input.shape.dims().to_vec();
+                shape.resize(op.new_dim_count, 1);
+                for BroadcastAxis { axis, new_size } in &op.broadcast_axes {
+                    shape[*axis] = *new_size;
+                }
                 Descriptor {
-                    shape: op.op.compute_output_shape(input.shape.dims()),
+                    shape: Shape::new(shape),
                     ..input
                 }
             }
@@ -106,7 +111,7 @@ impl Op {
             Op::UnaryPointwise(_) => OpKind::UnaryPointwise,
             Op::BinaryPointwise(_) => OpKind::BinaryPointwise,
             Op::ChangeDataType(_) => OpKind::ChangeDataType,
-            Op::Restructure(_) => OpKind::Restructure,
+            Op::Broadcast(_) => OpKind::Broadcast,
             Op::Reshape(_) => OpKind::Reshape,
         }
     }
@@ -144,7 +149,7 @@ impl Op {
             Op::Reduce(op) => {
                 op.input = mapping[op.input];
             }
-            Op::Restructure(op) => {
+            Op::Broadcast(op) => {
                 op.input = mapping[op.input];
             }
             Op::Reshape(op) => {
@@ -163,7 +168,7 @@ pub enum OpKind {
     UnaryPointwise,
     BinaryPointwise,
     ChangeDataType,
-    Restructure,
+    Broadcast,
     Reshape,
 }
 
@@ -199,7 +204,6 @@ pub enum UnaryPointwiseOp {
     Tan,
     Sigmoid,
     Tanh,
-    Relu,
 }
 
 /// Pointwise operator with two inputs.
@@ -281,37 +285,21 @@ impl Hash for UploadTensor {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Restructure {
+pub struct Broadcast {
     pub input: NodeId,
-    pub op: RestrctureOp,
+    pub new_dim_count: usize,
+    pub broadcast_axes: Vec<BroadcastAxis>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum RestrctureOp {
-    /// Broadcast an axis originally of length 1.
-    BroadcastAxis {
-        axis: BroadcastAxis,
-        new_size: usize,
-    },
+pub struct BroadcastAxis {
+    pub axis: usize,
+    pub new_size: usize,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub enum BroadcastAxis {
-    Existing(usize),
-    /// Prepend a new axis.
-    Expand,
-}
-
-impl RestrctureOp {
-    pub fn compute_output_shape(&self, input: &[usize]) -> Shape {
-        let mut shape = input.to_vec();
-        match self {
-            RestrctureOp::BroadcastAxis { axis, new_size } => match *axis {
-                BroadcastAxis::Existing(axis) => shape[axis] = *new_size,
-                BroadcastAxis::Expand => shape.insert(0, *new_size),
-            },
-        }
-        Shape::new(shape)
+impl BroadcastAxis {
+    pub fn new(axis: usize, new_size: usize) -> Self {
+        Self { axis, new_size }
     }
 }
 

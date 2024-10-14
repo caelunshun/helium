@@ -1,26 +1,21 @@
-use crate::cuda::error::CudaError;
+use crate::cuda::{allocator::CudaAllocator, cudnn::CudnnContext, error::CudaError};
 use cudarc::{
     driver,
-    driver::{
-        sys::{CUmemPool_attribute_enum, CUstream},
-        CudaDevice,
-    },
+    driver::{sys::CUstream, CudaDevice},
 };
-use parking_lot::RwLock;
+use parking_lot::{Mutex, MutexGuard, RwLock};
 use std::{
-    iter, ptr,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc, OnceLock,
-    },
+    iter,
+    sync::{Arc, OnceLock},
 };
 use thread_local::ThreadLocal;
 
 /// Shared state for caching CUDA values on a particular device.
 pub struct CudaContext {
     device: Arc<CudaDevice>,
+    allocator: Mutex<CudaAllocator>,
     stream_pool: ThreadLocal<Vec<CudaStream>>,
-    next_module_id: AtomicU64,
+    cudnn_pool: ThreadLocal<CudnnContext>,
 }
 
 impl CudaContext {
@@ -48,22 +43,13 @@ impl CudaContext {
     pub fn new(device_index: u32) -> Result<Self, CudaError> {
         let device = CudaDevice::new_with_stream(device_index as usize)?;
 
-        unsafe {
-            let mut mem_pool = ptr::null_mut();
-
-            driver::sys::lib().cuDeviceGetDefaultMemPool(&mut mem_pool, *device.cu_device());
-            let mut release_threshold = 1024u64 * 1024 * 1024;
-            driver::sys::lib().cuMemPoolSetAttribute(
-                mem_pool,
-                CUmemPool_attribute_enum::CU_MEMPOOL_ATTR_RELEASE_THRESHOLD,
-                &mut release_threshold as *mut _ as *mut _,
-            );
-        }
+        let allocator = unsafe { CudaAllocator::new(*device.cu_primary_ctx()) };
 
         Ok(Self {
             device,
+            allocator: Mutex::new(allocator),
             stream_pool: ThreadLocal::new(),
-            next_module_id: AtomicU64::new(0),
+            cudnn_pool: ThreadLocal::new(),
         })
     }
 
@@ -80,13 +66,19 @@ impl CudaContext {
             .map(Vec::as_slice)
     }
 
+    pub fn cudnn_handle(&self) -> &CudnnContext {
+        self.cudnn_pool.get_or(|| {
+            self.device.bind_to_thread().unwrap();
+            CudnnContext::new().expect("failed to init cuDNN")
+        })
+    }
+
     pub fn device(&self) -> &Arc<CudaDevice> {
         &self.device
     }
 
-    fn new_module_id(&self) -> String {
-        let id = self.next_module_id.fetch_add(1, Ordering::Relaxed);
-        format!("module{id}")
+    pub fn allocator(&self) -> MutexGuard<CudaAllocator> {
+        self.allocator.lock()
     }
 }
 

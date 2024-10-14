@@ -1,6 +1,8 @@
 //! Somewhat safe wrapper over the cuDNN
 //! Graph API.
 
+#![allow(unused)]
+
 use crate::{cuda::error::CudaError, data_type::DataType, shape::Shape};
 use cudarc::cudnn::{
     sys::{
@@ -177,7 +179,7 @@ impl Drop for RawDescriptor {
 unsafe impl Send for RawDescriptor {}
 unsafe impl Sync for RawDescriptor {}
 
-unsafe trait Attribute {
+pub unsafe trait Attribute {
     fn attrib_type() -> cudnnBackendAttributeType_t;
 }
 
@@ -268,7 +270,7 @@ unsafe impl Attribute for cudnnReduceTensorOp_t {
     }
 }
 
-pub struct TensorDescriptor(Arc<RawDescriptor>, TensorUid);
+pub struct TensorDescriptor(Arc<RawDescriptor>, TensorUid, TensorKind);
 
 impl TensorDescriptor {
     pub fn new(
@@ -294,11 +296,15 @@ impl TensorDescriptor {
         }
 
         desc.finalize()?;
-        Ok(Self(Arc::new(desc), id))
+        Ok(Self(Arc::new(desc), id, kind))
     }
 
     pub fn id(&self) -> TensorUid {
         self.1
+    }
+
+    pub fn is_virtual(&self) -> bool {
+        self.2 == TensorKind::Virtual
     }
 }
 
@@ -623,6 +629,11 @@ impl Engine {
         let mut refs = graph.refs.clone();
         refs.push(graph.raw.clone());
 
+        let json = plan.get_attribute_vec(CUDNN_ATTR_EXECUTION_PLAN_JSON_REPRESENTATION, || {
+            Ok(MaybeUninit::<u8>::uninit())
+        })?;
+        //println!("{}", std::str::from_utf8(&json).unwrap());
+
         Ok(Self {
             engine: Arc::new(engine),
             config: Arc::new(config),
@@ -640,8 +651,13 @@ impl Engine {
             .unwrap())
     }
 
-    pub unsafe fn execute(&self, varpack: &VariantPack) -> Result<(), CudaError> {
+    pub unsafe fn execute(
+        &self,
+        varpack: &VariantPack,
+        stream: cudaStream_t,
+    ) -> Result<(), CudaError> {
         unsafe {
+            lib().cudnnSetStream(self.cx.handle, stream).result()?;
             lib()
                 .cudnnBackendExecute(self.cx.handle, self.plan.desc, varpack.raw.desc)
                 .result()?;
@@ -825,7 +841,7 @@ mod tests {
                 )
                 .build(*workspace.device_ptr() as *mut c_void)
                 .unwrap();
-            engine.execute(&varpack).unwrap();
+            engine.execute(&varpack, ptr::null_mut()).unwrap();
         }
 
         let result = cuda.device().sync_reclaim(dev_c).unwrap();

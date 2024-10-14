@@ -5,6 +5,13 @@ use helium::{Device, Tensor};
 const DEVICE: Device = Device::Cuda(0);
 
 #[test]
+fn upload_download() {
+    let tensor = Tensor::from_vec(vec![5.0f32; 100], [25, 4], DEVICE);
+    assert_eq!(tensor.shape(), [25, 4]);
+    assert_eq!(tensor.into_vec::<f32>(), vec![5.0f32; 100],);
+}
+
+#[test]
 fn add() {
     let a = Tensor::from_vec(vec![2.0f32; 100], [50, 2], DEVICE);
     let b = Tensor::from_vec(vec![bf16::ONE; 100], [50, 2], DEVICE);
@@ -271,24 +278,12 @@ fn matmul_batched() {
 #[test]
 fn broadcast() {
     let x = Tensor::<2>::from_array([[1.0], [2.0]], DEVICE);
-    let result = x.broadcast(-1, 4);
+    let result = x.broadcast_to([2, 4]);
 
     assert_eq!(result.shape(), [2, 4]);
     assert_eq!(
         result.into_vec::<f32>().as_slice(),
         &[1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0][..]
-    );
-}
-
-#[test]
-fn expand() {
-    let x = Tensor::<1>::from_array([1.0, 2.0], DEVICE);
-    let result = x.expand(4);
-
-    assert_eq!(result.shape(), [4, 2]);
-    assert_eq!(
-        result.into_vec::<f32>().as_slice(),
-        &[1.0, 2.0, 1.0, 2.0, 1.0, 2.0, 1.0, 2.0][..]
     );
 }
 

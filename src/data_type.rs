@@ -83,3 +83,13 @@ pub enum DataVec {
     Bf16(Vec<bf16>),
     F16(Vec<f16>),
 }
+
+impl DataVec {
+    pub fn as_bytes(&self) -> &[u8] {
+        match self {
+            DataVec::F32(v) => bytemuck::cast_slice(v),
+            DataVec::Bf16(v) => bytemuck::cast_slice(v),
+            DataVec::F16(v) => bytemuck::cast_slice(v),
+        }
+    }
+}
