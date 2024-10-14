@@ -48,8 +48,8 @@ impl Op {
                 let input_b = get_input_descriptor(op.input_b);
 
                 let mut shape = input_a.shape.clone();
-                shape.set_dim_size(shape.num_dims() - 1, input_a.shape.dim_at(-1));
-                shape.set_dim_size(shape.num_dims() - 2, input_b.shape.dim_at(-2));
+                shape.set_dim_size(shape.num_dims() - 2, input_a.shape.dim_at(-2));
+                shape.set_dim_size(shape.num_dims() - 1, input_b.shape.dim_at(-1));
 
                 Descriptor { shape, ..input_a }
             }

@@ -3,18 +3,18 @@ use crate::{
     cuda::{
         allocator::Memory,
         context::{CudaContext, CudaStream},
-        cudnn,
         cudnn::{
-            CudnnContext, Engine, PointwiseMode, PointwiseOpDescriptor, TensorDescriptor,
-            TensorKind, VariantPack, VariantPackBuilder,
+            self, CudnnContext, Engine, MatmulOpDescriptor, PointwiseMode, PointwiseOpDescriptor,
+            TensorDescriptor, TensorKind, VariantPack, VariantPackBuilder,
         },
         Cuda,
     },
     opgraph::{
         op::{BinaryPointwiseOp, Op, UnaryPointwiseOp},
         subgraph::OpSubgraph,
-        Node, NodeId, OpGraph,
+        Intermediate, Node, NodeId, OpGraph,
     },
+    shape::Shape,
     DataType,
 };
 use ahash::AHashSet;
@@ -93,6 +93,8 @@ impl CudnnGraph {
 
         let mut visited = AHashSet::new();
 
+        let mode = Mode::of(&self.subgraph);
+
         while let Some(node_id) = stack.pop() {
             visited.insert(node_id);
             let Node::Intermediate(node) = self.subgraph.graph().get(node_id) else {
@@ -109,7 +111,7 @@ impl CudnnGraph {
                     TensorKind::Concrete
                 },
                 node.descriptor.data_type,
-                &node.descriptor.shape,
+                &mode.augment_tensor_shape(&node.descriptor.shape),
             )
             .expect("failed to create tensor descriptor");
 
@@ -144,7 +146,17 @@ impl CudnnGraph {
         builder: &mut cudnn::OperationGraphBuilder,
     ) {
         match op {
-            Op::Matmul(_) => {}
+            Op::Matmul(op) => {
+                builder.add_op(
+                    MatmulOpDescriptor::new(
+                        DataType::F32,
+                        &tensor_descriptors[op.input_a],
+                        &tensor_descriptors[op.input_b],
+                        &tensor_descriptors[output],
+                    )
+                    .expect("failed to build matmul op"),
+                );
+            }
             Op::Transpose(_) => todo!(),
             Op::UnaryPointwise(op) => {
                 let mode = Self::map_unary_pointwise_op(op.op);
@@ -239,5 +251,38 @@ impl Instruction<Cuda> for CudnnGraph {
 
     fn perf(&self) -> InstrPerf {
         todo!()
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum Mode {
+    Matmul,
+}
+
+impl Mode {
+    pub fn of(subgraph: &OpSubgraph) -> Self {
+        for node in subgraph.nodes() {
+            if let Node::Intermediate(Intermediate { op, .. }) = subgraph.graph().get(node) {
+                if let Op::Matmul(_) = op {
+                    return Mode::Matmul;
+                }
+            }
+        }
+        unreachable!("unsupported subgraph for cuDNN")
+    }
+
+    pub fn augment_tensor_shape(&self, shape: &Shape) -> Shape {
+        match self {
+            Mode::Matmul => {
+                // cuDNN as of v9.6.0 appears to have a bug where
+                // matmul does not work without a batch dimension.
+                // Add a batch dimension of 1.
+                let mut new_shape = shape.dims().to_vec();
+                if new_shape.len() == 2 {
+                    new_shape.insert(0, 1);
+                }
+                Shape::new(new_shape)
+            }
+        }
     }
 }

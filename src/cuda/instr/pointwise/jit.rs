@@ -337,7 +337,8 @@ impl IndexMapping {
             IndexMapping::Transpose { in_shape } => {
                 let x = in_shape.dim_at(-1);
                 let y = in_shape.dim_at(-2);
-                format!("({current} % {y}) * {x} + ({current} / {y})")
+                let stride = x * y;
+                format!("({current} % {y}) * {x} + (({current} % {stride}) / {y}) + ({current} / {stride}) * {stride}")
             }
             IndexMapping::Broadcast {
                 broadcast,

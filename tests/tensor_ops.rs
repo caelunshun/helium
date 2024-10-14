@@ -195,7 +195,8 @@ fn matmul_f16() {
             [f16::from_f32(4.0), f16::from_f32(5.0), f16::from_f32(6.0)],
         ],
         DEVICE,
-    );
+    )
+    .transpose();
     let b = Tensor::<2>::from_array(
         [
             [f16::from_f32(1.0), f16::from_f32(2.0)],
@@ -203,9 +204,10 @@ fn matmul_f16() {
             [f16::from_f32(5.0), f16::from_f32(6.0)],
         ],
         DEVICE,
-    );
+    )
+    .transpose();
 
-    let result = a.matmul(b).into_vec::<f32>();
+    let result = a.matmul(b).transpose().into_vec::<f32>();
 
     assert_ulps_eq!(
         result.as_slice(),
@@ -256,7 +258,8 @@ fn matmul_batched() {
             ],
         ],
         DEVICE,
-    );
+    )
+    .transpose();
 
     let b = Tensor::<3>::from_array(
         [
@@ -274,9 +277,10 @@ fn matmul_batched() {
             ],
         ],
         DEVICE,
-    );
+    )
+    .transpose();
 
-    let result = a.matmul(b).into_vec::<f32>();
+    let result = a.matmul(b).transpose().into_vec::<f32>();
 
     let expected = vec![
         9.0, 12.0, 15.0, 19.0, 26.0, 33.0, 29.0, 40.0, 51.0, // first batch
@@ -307,5 +311,21 @@ fn reshape() {
     assert_eq!(
         result.into_vec::<f32>().as_slice(),
         &[1.0, 2.0, 3.0, 4.0][..]
+    );
+}
+
+#[test]
+fn transpose() {
+    let x = Tensor::<3>::from_array(
+        [
+            [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+            [[7.0, 8.0, 9.0], [10.0, 11.0, 12.0]],
+        ],
+        DEVICE,
+    );
+    let result = x.transpose().into_vec::<f32>();
+    assert_eq!(
+        result,
+        &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0, 7.0, 10.0, 8.0, 11.0, 9.0, 12.0]
     );
 }
