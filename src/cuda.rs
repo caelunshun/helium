@@ -20,6 +20,7 @@ pub mod context;
 mod cudnn;
 pub mod error;
 mod instr;
+mod kernel_jit;
 mod tensor_storage;
 
 #[derive(Copy, Clone, Debug)]

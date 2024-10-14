@@ -1,7 +1,17 @@
 use crate::cuda::{allocator::CudaAllocator, cudnn::CudnnContext, error::CudaError};
 use cudarc::{
     driver,
-    driver::{sys::CUstream, CudaDevice},
+    driver::{
+        sys::{
+            CUdevice_attribute_enum::{
+                CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
+                CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR,
+            },
+            CUstream,
+        },
+        CudaDevice,
+    },
+    nvrtc::Ptx,
 };
 use parking_lot::{Mutex, MutexGuard, RwLock};
 use std::{
@@ -16,6 +26,8 @@ pub struct CudaContext {
     allocator: Mutex<CudaAllocator>,
     stream_pool: ThreadLocal<Vec<CudaStream>>,
     cudnn_pool: ThreadLocal<CudnnContext>,
+    sm_version: u32,
+    loaded_kernels: Mutex<Vec<Arc<Ptx>>>,
 }
 
 impl CudaContext {
@@ -45,11 +57,16 @@ impl CudaContext {
 
         let allocator = unsafe { CudaAllocator::new(*device.cu_primary_ctx()) };
 
+        let compute_major = device.attribute(CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR)?;
+        let compute_minor = device.attribute(CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR)?;
+
         Ok(Self {
             device,
             allocator: Mutex::new(allocator),
             stream_pool: ThreadLocal::new(),
             cudnn_pool: ThreadLocal::new(),
+            sm_version: (compute_major * 10 + compute_minor) as u32,
+            loaded_kernels: Mutex::new(Vec::new()),
         })
     }
 
@@ -79,6 +96,29 @@ impl CudaContext {
 
     pub fn allocator(&self) -> MutexGuard<CudaAllocator> {
         self.allocator.lock()
+    }
+
+    pub fn sm_version(&self) -> u32 {
+        self.sm_version
+    }
+
+    pub fn load_kernel_if_needed(
+        &self,
+        kernel: &Arc<Ptx>,
+        module_name: &str,
+        func_name: &str,
+    ) -> Result<(), CudaError> {
+        let mut kernels = self.loaded_kernels.lock();
+        if kernels.iter().any(|kernel2| Arc::ptr_eq(kernel, kernel2)) {
+            return Ok(());
+        }
+        self.device.load_ptx(
+            (**kernel).clone(),
+            module_name,
+            &[func_name.to_owned().leak()],
+        )?;
+        kernels.push(kernel.clone());
+        Ok(())
     }
 }
 

@@ -1,0 +1,29 @@
+---
+source: src/cuda/kernel_jit.rs
+expression: "kernel.build_source(\"copy_kernel\")"
+---
+#include <cuda_bf16.h>
+#include <cuda_fp16.h>
+#include <vector_types.h>
+
+typedef unsigned int uint32_t;
+
+struct alignas(8) __nv_bfloat164 {
+    __nv_bfloat16 x;
+    __nv_bfloat16 y;
+    __nv_bfloat16 z;
+    __nv_bfloat16 w;
+};
+
+struct alignas(8) half4 {
+    half x;
+    half y;
+    half z;
+    half w;
+};
+
+
+__global__ void copy_kernel(__nv_bfloat16 *ident0, __half *ident1) {
+    uint32_t i = threadIdx.x + blockDim.x * blockIdx.x;
+ident0[i] = static_cast<__nv_bfloat16>(static_cast<float>(ident1[i]));
+}

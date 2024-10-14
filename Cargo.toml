@@ -17,6 +17,7 @@ thiserror = "1"
 thread_local = { version = "1", optional = true }
 rand = "0.8"
 rand_pcg = "0.3"
+indoc = { version = "2", optional = true }
 
 [dependencies.cudarc]
 version = "0.12"
@@ -43,7 +44,7 @@ faer = "0.19"
 
 [features]
 default = ["cpu", "cuda"]
-cuda = ["dep:cudarc", "dep:thread_local", "dep:bumpalo"]
+cuda = ["dep:cudarc", "dep:thread_local", "dep:bumpalo", "dep:indoc"]
 cpu = ["dep:gemm", "dep:sleef", "dep:rayon"]
 
 [profile.dev]
