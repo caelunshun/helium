@@ -2,7 +2,7 @@ use crate::{
     backend::{InstrPerf, Instruction, TensorMap},
     cuda::{
         allocator::Memory,
-        context::CudaContext,
+        context::{CudaContext, CudaStream},
         cudnn,
         cudnn::{
             CudnnContext, Engine, PointwiseMode, PointwiseOpDescriptor, TensorDescriptor,
@@ -18,7 +18,6 @@ use crate::{
     DataType,
 };
 use ahash::AHashSet;
-use cudarc::cudnn::sys::cudaStream_t;
 use slotmap::SecondaryMap;
 use std::{ffi::c_void, ptr, sync::Arc};
 
@@ -37,7 +36,7 @@ impl CudnnGraph {
     pub fn execute(
         &self,
         tensors: &TensorMap<Cuda>,
-        stream: cudaStream_t,
+        stream: &CudaStream,
         cx: &CudaContext,
         hold_allocations: &mut Vec<Memory>,
     ) {
@@ -72,7 +71,7 @@ impl CudnnGraph {
 
         unsafe {
             engine
-                .execute(&varpack, stream)
+                .execute(&varpack, stream.raw() as _)
                 .expect("failed to execute cuDNN graph");
         }
     }

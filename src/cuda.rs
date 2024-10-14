@@ -107,12 +107,7 @@ impl Executor<Cuda> for CudaExecutor {
     fn execute_instr(&mut self, instr: &Instr, tensors: &mut TensorMap<Cuda>) {
         let stream = &self.streams[self.instr_index % self.streams.len()];
 
-        instr.execute(
-            tensors,
-            stream.raw() as _,
-            self.cx,
-            &mut self.hold_allocations,
-        );
+        instr.execute(tensors, stream, self.cx, &mut self.hold_allocations);
 
         self.instr_index += 1;
     }

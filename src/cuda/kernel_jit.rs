@@ -106,7 +106,7 @@ impl KernelBuilder {
         self
     }
 
-    fn build_source(&self, kernel_name: &str) -> String {
+    pub fn build_source(&self, kernel_name: &str) -> String {
         let Self {
             statements,
             items,
@@ -221,7 +221,7 @@ impl KernelBuilder {
 
 /// Parameter passed to a kernel.
 #[derive(Debug, Clone)]
-enum KernelParam {
+pub enum KernelParam {
     /// Pointer to an input tensor of the subgraph.
     Input(NodeId),
     /// Pointer to an output tensor of the subgraph.

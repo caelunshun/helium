@@ -1,13 +1,18 @@
 use crate::{
     backend::{InstrPerf, Instruction, TensorMap},
-    cuda::{allocator::Memory, context::CudaContext, instr::cudnn_graph::CudnnGraph, Cuda},
+    cuda::{
+        allocator::Memory,
+        context::{CudaContext, CudaStream},
+        instr::cudnn_graph::CudnnGraph,
+        Cuda,
+    },
     data_type::DataVec,
     opgraph::{NodeId, OpGraph},
 };
-use cudarc::cudnn::sys::cudaStream_t;
 use std::sync::Arc;
 
 pub mod cudnn_graph;
+pub mod pointwise;
 
 #[derive(Debug, Clone)]
 pub enum Instr {
@@ -20,7 +25,7 @@ impl Instr {
     pub fn execute(
         &self,
         tensors: &TensorMap<Cuda>,
-        stream: cudaStream_t,
+        stream: &CudaStream,
         cx: &CudaContext,
         hold_allocations: &mut Vec<Memory>,
     ) {

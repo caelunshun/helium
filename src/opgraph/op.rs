@@ -89,15 +89,8 @@ impl Op {
             }
             Op::Broadcast(op) => {
                 let input = get_input_descriptor(op.input);
-                let mut shape = input.shape.dims().to_vec();
-                shape.resize(op.new_dim_count, 1);
-                for BroadcastAxis { axis, new_size } in &op.broadcast_axes {
-                    shape[*axis] = *new_size;
-                }
-                Descriptor {
-                    shape: Shape::new(shape),
-                    ..input
-                }
+                let shape = op.output_shape(&input.shape);
+                Descriptor { shape, ..input }
             }
         }
     }
@@ -289,6 +282,27 @@ pub struct Broadcast {
     pub input: NodeId,
     pub new_dim_count: usize,
     pub broadcast_axes: Vec<BroadcastAxis>,
+}
+
+impl Broadcast {
+    pub fn output_shape(&self, input_shape: &Shape) -> Shape {
+        let mut shape = input_shape.dims().to_vec();
+
+        if shape.len() < self.new_dim_count {
+            for _ in 0..self.new_dim_count - shape.len() {
+                shape.insert(0, 1);
+            }
+        }
+
+        for BroadcastAxis { axis, new_size } in &self.broadcast_axes {
+            shape[*axis] = *new_size;
+        }
+        Shape::new(shape)
+    }
+
+    pub fn is_axis_broadcasted(&self, axis: usize) -> bool {
+        self.broadcast_axes.iter().any(|x| x.axis == axis)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

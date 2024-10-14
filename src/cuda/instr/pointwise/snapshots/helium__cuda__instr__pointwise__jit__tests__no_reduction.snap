@@ -1,0 +1,60 @@
+---
+source: src/cuda/instr/pointwise/jit.rs
+expression: "kernel.build_source(\"test\")"
+---
+#include <cuda_bf16.h>
+#include <cuda_fp16.h>
+#include <vector_types.h>
+
+typedef unsigned int uint32_t;
+
+struct alignas(8) __nv_bfloat164 {
+    __nv_bfloat16 x;
+    __nv_bfloat16 y;
+    __nv_bfloat16 z;
+    __nv_bfloat16 w;
+};
+
+struct alignas(8) half4 {
+    half x;
+    half y;
+    half z;
+    half w;
+};
+
+
+__global__ void test(__nv_bfloat16 *ident0, __half *ident1, __nv_bfloat16 *ident11, __half *ident15) {
+    uint32_t group = (blockDim.x * blockIdx.x) / 512;
+uint32_t block_group_start = blockIdx.x / 2 * 2;
+uint32_t index_in_group = (blockIdx.x - block_group_start) * blockDim.x + threadIdx.x;
+uint32_t out_index = 500 * group + index_in_group;
+if (index_in_group >= 500) return;
+uint32_t ident4 = out_index;
+float ident3 = static_cast<float>(ident0[ident4]);
+uint32_t ident8 = out_index;
+uint32_t ident10;
+{
+    uint32_t in_index = 0;
+    uint32_t coord_out_dim0 = (ident8 / 1) % 10;
+uint32_t coord_in_dim0 = coord_out_dim0;
+in_index += coord_in_dim0 * 1;
+uint32_t coord_out_dim1 = (ident8 / 10) % 10;
+uint32_t coord_in_dim1 = 0;
+in_index += coord_in_dim1 * 10;
+uint32_t coord_out_dim2 = (ident8 / 100) % 5;
+uint32_t coord_in_dim2 = 0;
+in_index += coord_in_dim2 * 10;
+
+    ident10 = in_index;
+}
+
+uint32_t ident9 = ident10;
+uint32_t ident7 = ident9;
+float ident6 = static_cast<float>(ident1[ident7]);
+float ident2 = powf(ident3, ident6);
+ident11[out_index] = static_cast<__nv_bfloat16>(ident2);
+uint32_t ident14 = out_index;
+float ident13 = static_cast<float>(ident1[ident14]);
+float ident12 = cosf(ident13);
+ident15[out_index] = static_cast<__half>(ident12);
+}

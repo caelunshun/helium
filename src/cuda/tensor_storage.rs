@@ -1,8 +1,12 @@
 use crate::{
-    cuda::{allocator::Memory, context::CudaContext, error::CudaError},
+    cuda::{
+        allocator::Memory,
+        context::{CudaContext, CudaStream},
+        error::CudaError,
+    },
     data_type::{DataType, DataTypeConversion, DataVec},
 };
-use cudarc::{cudnn::sys::cudaStream_t, driver, driver::sys::CUdeviceptr};
+use cudarc::{driver, driver::sys::CUdeviceptr};
 use half::{bf16, f16};
 use std::sync::Arc;
 
@@ -27,24 +31,24 @@ impl TensorStorage {
     pub fn initialize_with_data(
         &self,
         data: &DataVec,
-        stream: cudaStream_t,
+        stream: &CudaStream,
     ) -> Result<(), CudaError> {
         assert_eq!(data.as_bytes().len(), self.memory.len() as usize);
         let bytes: &[u8] = data.as_bytes();
         unsafe {
-            driver::result::memcpy_htod_async(self.device_ptr(), bytes, stream as _)?;
+            driver::result::memcpy_htod_async(self.device_ptr(), bytes, stream.raw() as _)?;
         }
         Ok(())
     }
 
-    pub fn copy_from(&self, other: &TensorStorage, stream: cudaStream_t) -> Result<(), CudaError> {
+    pub fn copy_from(&self, other: &TensorStorage, stream: &CudaStream) -> Result<(), CudaError> {
         assert_eq!(self.memory.len(), other.memory.len());
         unsafe {
             driver::result::memcpy_dtod_async(
                 self.memory.device_ptr(),
                 other.memory.device_ptr(),
                 self.memory.len() as usize,
-                stream as _,
+                stream.raw() as _,
             )?;
         }
         Ok(())
