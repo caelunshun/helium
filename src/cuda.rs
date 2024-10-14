@@ -3,7 +3,7 @@ use crate::{
     cuda::{
         allocator::Memory,
         context::{CudaContext, CudaStream},
-        instr::{CudnnGraph, Instr},
+        instr::{cudnn_graph::CudnnGraph, Instr},
         tensor_storage::TensorStorage,
     },
     data_type::{DataType, DataTypeConversion},
