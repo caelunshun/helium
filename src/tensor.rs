@@ -136,13 +136,13 @@ impl<const D: usize> Tensor<D> {
         let shape_rhs = rhs.shape();
 
         assert_eq!(
-            shape_lhs[D - 2],
-            shape_rhs[D - 1],
-            "invalid dimensions for matmul: {}x{} (lhs) is not compatible with {}x{} (rhs)",
             shape_lhs[D - 1],
-            shape_lhs[D - 2],
-            shape_rhs[D - 1],
             shape_rhs[D - 2],
+            "invalid dimensions for matmul: {}x{} (lhs) is not compatible with {}x{} (rhs)",
+            shape_lhs[D - 2],
+            shape_lhs[D - 1],
+            shape_rhs[D - 2],
+            shape_rhs[D - 1],
         );
 
         assert_eq!(
@@ -518,6 +518,13 @@ impl<const D: usize> Tensor<D> {
     }
 
     fn op_binary_pointwise(&self, rhs: &Self, op: BinaryPointwiseOp) -> Self {
+        assert_eq!(
+            self.shape(),
+            rhs.shape(),
+            "shape mismatch for binary op: lhs has shape {:?} while rhs has shape {:?}",
+            self.shape(),
+            rhs.shape()
+        );
         let (cx, this) = self.make_graph();
         Tensor::from_op(
             &cx,

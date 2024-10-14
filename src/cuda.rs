@@ -13,6 +13,7 @@ use cudarc::{
     driver,
     driver::sys::{CUevent, CUevent_flags_enum, CUevent_wait_flags_enum},
 };
+use instr::pointwise::PointwiseGraph;
 use std::sync::Arc;
 
 mod allocator;
@@ -38,13 +39,16 @@ impl Backend for Cuda {
                 node: node_id,
                 data: op.data.clone(),
             },
-            Op::Matmul(_)
-            | Op::Transpose(_)
+            Op::Transpose(_)
             | Op::UnaryPointwise(_)
             | Op::BinaryPointwise(_)
             | Op::ChangeDataType(_)
             | Op::Reduce(_)
             | Op::Broadcast(_) => {
+                let subgraph = OpSubgraph::from_nodes(graph, vec![node_id]);
+                Instr::PointwiseGraph(PointwiseGraph::new(subgraph))
+            }
+            Op::Matmul(_) => {
                 let subgraph = OpSubgraph::from_nodes(graph, vec![node_id]);
                 Instr::CudnnGraph(CudnnGraph::new(subgraph))
             }

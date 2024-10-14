@@ -32,7 +32,6 @@ pub struct KernelBuilder {
     param_declarations: Vec<String>,
     statements: Vec<String>,
     next_ident: Cell<u64>,
-    shared_memory_bytes: u32,
 }
 
 impl Default for KernelBuilder {
@@ -65,7 +64,6 @@ impl Default for KernelBuilder {
             param_declarations: vec![],
             statements: vec![],
             next_ident: Cell::new(0),
-            shared_memory_bytes: 0,
         }
     }
 }
@@ -75,6 +73,7 @@ impl KernelBuilder {
         Self::default()
     }
 
+    #[expect(unused)]
     pub fn include(&mut self, header: &str) -> &mut Self {
         if !self.include_headers.iter().any(|h| h == header) {
             self.include_headers.push(header.to_owned());
@@ -101,11 +100,6 @@ impl KernelBuilder {
         self
     }
 
-    pub fn register_shared_memory_bytes(&mut self, bytes: u32) -> &mut Self {
-        self.shared_memory_bytes += bytes;
-        self
-    }
-
     pub fn build_source(&self, kernel_name: &str) -> String {
         let Self {
             statements,
@@ -125,7 +119,7 @@ impl KernelBuilder {
             {includes}
             {items}
 
-            __global__ void {kernel_name}({params}) {{
+            extern \"C\" __global__ void {kernel_name}({params}) {{
                 {statements}
             }}
         "}
@@ -188,7 +182,6 @@ impl KernelBuilder {
             ptx,
             params: self.params.clone(),
             kernel_name: kernel_name.to_owned(),
-            shared_memory_bytes: self.shared_memory_bytes,
         })
     }
 
@@ -200,6 +193,7 @@ impl KernelBuilder {
         }
     }
 
+    #[expect(unused)]
     pub fn cpp_vector4_type(data_type: DataType) -> &'static str {
         match data_type {
             DataType::F16 => "half4",
@@ -208,6 +202,7 @@ impl KernelBuilder {
         }
     }
 
+    #[expect(unused)]
     pub fn vector_component(index: usize) -> &'static str {
         match index {
             0 => "x",
@@ -237,7 +232,6 @@ pub struct JitKernel {
     params: Vec<KernelParam>,
     kernel_name: String,
     module_name: String,
-    shared_memory_bytes: u32,
 }
 
 impl JitKernel {
@@ -281,7 +275,7 @@ impl JitKernel {
                     LaunchConfig {
                         grid_dim: (grid_size, 1, 1),
                         block_dim: (block_size, 1, 1),
-                        shared_mem_bytes: self.shared_memory_bytes,
+                        shared_mem_bytes: 0,
                     },
                     &mut params,
                 )?;

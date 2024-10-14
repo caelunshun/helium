@@ -72,6 +72,15 @@ pub fn generate_kernel(subgraph: &OpSubgraph) -> KernelBuilder {
     kernel
 }
 
+pub fn compute_grid_size(subgraph: &OpSubgraph) -> usize {
+    let ReductionStrides {
+        group_size,
+        num_groups,
+    } = compute_reduction_stride(subgraph);
+    let blocks_per_group = (group_size + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    blocks_per_group * num_groups
+}
+
 struct ReductionStrides {
     group_size: usize,
     num_groups: usize,

@@ -19,6 +19,7 @@ mod jit;
 /// 2. All reduction ops must be leaves.
 /// 3. All reductions must have the same size.
 /// 4. All outputs must have the same size.
+#[derive(Debug, Clone)]
 pub struct PointwiseGraph {
     subgraph: OpSubgraph,
 }
@@ -28,7 +29,21 @@ impl PointwiseGraph {
         Self { subgraph }
     }
 
-    pub fn execute(&self, tensors: &TensorMap<Cuda>, stream: &CudaStream, cx: &CudaContext) {}
+    pub fn execute(&self, tensors: &TensorMap<Cuda>, stream: &CudaStream, cx: &CudaContext) {
+        let kernel = jit::generate_kernel(&self.subgraph)
+            .build("pointwise_kernel", cx)
+            .expect("failed to compile kernel");
+        let grid_size = jit::compute_grid_size(&self.subgraph);
+        kernel
+            .execute(
+                |node| tensors.get_storage(node),
+                stream,
+                cx,
+                grid_size as u32,
+                jit::BLOCK_SIZE as u32,
+            )
+            .expect("failed to execute generated kernel");
+    }
 }
 
 impl Instruction<Cuda> for PointwiseGraph {
@@ -40,15 +55,15 @@ impl Instruction<Cuda> for PointwiseGraph {
         self.subgraph.leafs().collect()
     }
 
-    fn can_fuse_with(&self, next: &Self, op_graph: &Arc<OpGraph>) -> bool {
+    fn can_fuse_with(&self, _next: &Self, _op_graph: &Arc<OpGraph>) -> bool {
         todo!()
     }
 
-    fn fuse_with(&self, next: &Self, op_graph: &Arc<OpGraph>) -> Self {
+    fn fuse_with(&self, _next: &Self, _op_graph: &Arc<OpGraph>) -> Self {
         todo!()
     }
 
     fn perf(&self) -> InstrPerf {
-        todo!()
+        InstrPerf::MemoryBound
     }
 }

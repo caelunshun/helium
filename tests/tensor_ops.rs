@@ -22,6 +22,16 @@ fn add() {
 }
 
 #[test]
+fn add_with_broadcaast() {
+    let a = Tensor::<2>::from_array([[3.0f32; 5]; 5], DEVICE);
+    let b = Tensor::<1>::from_array([1.0f32], DEVICE);
+
+    let result = (a + b.broadcast_to([5, 5])).into_vec::<f32>();
+
+    assert_ulps_eq!(result.as_slice(), &[4.0f32; 25][..]);
+}
+
+#[test]
 fn multiply() {
     let a = Tensor::from_vec(vec![2.0f32; 100], [50, 2], DEVICE);
     let b = Tensor::from_vec(vec![bf16::from_f32(3.0); 100], [50, 2], DEVICE);
@@ -142,10 +152,11 @@ fn reduce_min() {
 
 #[test]
 fn matmul_simple() {
-    let a = Tensor::<2>::from_array([[2.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.0, 0.0, 2.0]], DEVICE);
-    let b = Tensor::<2>::from_array([[1.0, 2.0, 3.0], [2.0, 4.0, 6.0]], DEVICE);
+    let a = Tensor::<2>::from_array([[2.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.0, 0.0, 2.0]], DEVICE)
+        .transpose();
+    let b = Tensor::<2>::from_array([[1.0, 2.0, 3.0], [2.0, 4.0, 6.0]], DEVICE).transpose();
 
-    let result = a.matmul(b).into_vec::<f32>();
+    let result = a.matmul(b).transpose().into_vec::<f32>();
 
     assert_ulps_eq!(result.as_slice(), &[2.0, 4.0, 6.0, 4.0, 8.0, 12.0][..]);
 }

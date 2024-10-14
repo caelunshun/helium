@@ -9,6 +9,7 @@ use crate::{
     data_type::DataVec,
     opgraph::{NodeId, OpGraph},
 };
+use pointwise::PointwiseGraph;
 use std::sync::Arc;
 
 pub mod cudnn_graph;
@@ -19,6 +20,7 @@ pub enum Instr {
     UploadTensor { node: NodeId, data: DataVec },
     CopyTensor { from: NodeId, to: NodeId },
     CudnnGraph(CudnnGraph),
+    PointwiseGraph(PointwiseGraph),
 }
 
 impl Instr {
@@ -31,6 +33,7 @@ impl Instr {
     ) {
         match self {
             Instr::CudnnGraph(instr) => instr.execute(tensors, stream, cx, hold_allocations),
+            Instr::PointwiseGraph(instr) => instr.execute(tensors, stream, cx),
             Instr::UploadTensor { node, data } => {
                 tensors
                     .get_storage(*node)
@@ -52,6 +55,7 @@ impl Instruction<Cuda> for Instr {
         match self {
             Instr::UploadTensor { .. } => vec![],
             Instr::CudnnGraph(instr) => instr.inputs(),
+            Instr::PointwiseGraph(instr) => instr.inputs(),
             Instr::CopyTensor { from, .. } => vec![*from],
         }
     }
@@ -60,6 +64,7 @@ impl Instruction<Cuda> for Instr {
         match self {
             Instr::UploadTensor { node, .. } => vec![*node],
             Instr::CudnnGraph(instr) => instr.outputs(),
+            Instr::PointwiseGraph(instr) => instr.outputs(),
             Instr::CopyTensor { to, .. } => vec![*to],
         }
     }
@@ -85,6 +90,7 @@ impl Instruction<Cuda> for Instr {
     fn perf(&self) -> InstrPerf {
         match self {
             Instr::CudnnGraph(instr) => instr.perf(),
+            Instr::PointwiseGraph(instr) => instr.perf(),
             Instr::UploadTensor { .. } | Instr::CopyTensor { .. } => InstrPerf::MemoryBound,
         }
     }
