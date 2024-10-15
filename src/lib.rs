@@ -1,6 +1,6 @@
 #![feature(stdarch_x86_avx512, portable_simd)]
 
-//pub mod autodiff;
+pub mod autodiff;
 mod backend;
 #[cfg(feature = "cpu")]
 pub mod cpu;
@@ -16,7 +16,7 @@ pub mod tensor;
 
 #[doc(inline)]
 pub use self::{
-    //autodiff::{AdTensor, Gradients, Param},
+    autodiff::{AdTensor, Gradients, Param},
     data_type::DataType,
     device::Device,
     tensor::Tensor,

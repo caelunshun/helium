@@ -99,10 +99,20 @@ impl OpGraph {
 
     pub fn remove(&mut self, id: NodeId) {
         self.nodes.remove(id).unwrap();
-        for pred in &self.inbound_edges[id] {
+        for pred in self
+            .inbound_edges
+            .get(id)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+        {
             remove_element(&mut self.outbound_edges[*pred], id);
         }
-        for suc in &self.outbound_edges[id] {
+        for suc in self
+            .outbound_edges
+            .get(id)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+        {
             remove_element(&mut self.inbound_edges[*suc], id);
         }
 

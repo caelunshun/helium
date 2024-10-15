@@ -62,19 +62,25 @@ impl<const D: usize> AdTensor<D> {
         }
     }
 
+    pub fn broadcast_to<const D2: usize>(self, new_shape: [usize; D2]) -> AdTensor<D2> {
+        let result = self.tensor.broadcast_to(new_shape);
+
+        let tape = todo!();
+
+        AdTensor {
+            tape,
+            tensor: result,
+        }
+    }
+
     pub fn reduce_sum<const D2: usize>(self, depth: u32) -> AdTensor<D2> {
         let input_shape = self.tensor.shape();
         let result: Tensor<D2> = self.tensor.reduce_sum(depth);
 
         let tape = self.tape.append_unary(move |flow: Tensor<D2>| {
             let mut new_shape = [1usize; D];
-            new_shape[..D2].copy_from_slice(&flow.shape()[..D2]);
-            let mut flow: Tensor<D> = flow.reshape(new_shape);
-            for i in 0..depth {
-                let axis = D - i as usize - 1;
-                flow = flow.broadcast(-(i as i32), input_shape[axis]);
-            }
-            flow
+            new_shape[..D2].copy_from_slice(&input_shape[..D2]);
+            flow.broadcast_to(new_shape)
         });
 
         AdTensor {

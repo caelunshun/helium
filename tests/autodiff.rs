@@ -24,6 +24,25 @@ fn autodiff_scalar() {
 }
 
 #[test]
+fn reduce_sum() {
+    let param = Param::new(Tensor::<1>::from_array([10.0f32; 10], DEVICE));
+    let input = AdTensor::new(Tensor::<1>::from_array([2.0f32; 10], DEVICE));
+
+    let result = (input * param.clone()).reduce_sum::<1>(1) * 3.0;
+
+    let backward = result.backward();
+
+    assert_ulps_eq!(
+        backward
+            .get::<1>(param.id())
+            .clone()
+            .into_vec::<f32>()
+            .as_slice(),
+        &[6.0f32; 10][..]
+    );
+}
+
+#[test]
 fn basic_gradient_descent() {
     // Use gradient descent to converge a parameter onto sqrt(X)
     const X: f32 = 1001.0;
@@ -48,7 +67,6 @@ fn basic_gradient_descent() {
             "error: {error}, guess: {}",
             guess.value().clone().into_scalar::<f32>()
         );
-
         let learning_rate = 1e-4;
         let gradient: Tensor<1> = grads.remove(guess.id());
 
