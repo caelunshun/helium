@@ -38,12 +38,14 @@ impl CudaContext {
         // Optimistic check with read-only lock
         let guard = lock.read();
         if let Some(Some(cx)) = guard.get(device_index as usize) {
+            cx.device.bind_to_thread()?;
             return Ok(*cx);
         }
 
         drop(guard);
         let mut guard = lock.write();
         if let Some(Some(cx)) = guard.get(device_index as usize) {
+            cx.device.bind_to_thread()?;
             return Ok(*cx);
         }
 

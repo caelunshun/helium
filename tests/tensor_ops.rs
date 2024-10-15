@@ -12,7 +12,7 @@ fn upload_download() {
 }
 
 #[test]
-fn add() {
+fn add_simple() {
     let a = Tensor::from_vec(vec![2.0f32; 100], [50, 2], DEVICE);
     let b = Tensor::from_vec(vec![bf16::ONE; 100], [50, 2], DEVICE);
 
@@ -148,6 +148,21 @@ fn reduce_min() {
 
     assert_ulps_eq!(min_all.into_scalar::<f32>(), 1.0);
     assert_ulps_eq!(min_dim1.into_vec::<f32>().as_slice(), &[1.0, 5.0, 9.0][..]);
+}
+
+#[test]
+fn reduce_large() {
+    let mut data = Vec::new();
+    data.extend_from_slice(&[1.0f32; 100_000]);
+    data.extend_from_slice(&[2.0f32; 100_000]);
+
+    let x = Tensor::<3>::from_vec(data, [2, 1000, 100], DEVICE);
+
+    let sum_all = x.clone().reduce_sum::<1>(3).into_scalar::<f32>();
+    let sum_partial = x.reduce_sum::<2>(2).into_vec::<f32>();
+
+    assert_ulps_eq!(sum_all, 300_000.0f32);
+    assert_ulps_eq!(sum_partial.as_slice(), &[100_000.0f32, 200_000.0][..]);
 }
 
 #[test]

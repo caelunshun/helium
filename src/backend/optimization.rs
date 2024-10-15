@@ -3,11 +3,11 @@ use crate::{
     opgraph::{Node, NodeId, OpGraph},
 };
 use slotmap::{SecondaryMap, SlotMap};
-use std::sync::Arc;
+use std::{mem, sync::Arc};
 
 pub fn generate_plan<B: Backend>(op_graph: &Arc<OpGraph>, backend: &B) -> Plan<B> {
     let graph = make_instr_graph(op_graph, backend);
-    generate_plan_from_graph(graph)
+    generate_plan_from_graph(graph, op_graph)
 }
 
 /// Output of the optimization engine.
@@ -142,7 +142,7 @@ fn make_instr_graph<B: Backend>(op_graph: &Arc<OpGraph>, backend: &B) -> InstrGr
 
 /// Performs a topological sort of the graph
 /// to generate a plan that maximizes concurrency.
-fn generate_plan_from_graph<B: Backend>(mut graph: InstrGraph<B>) -> Plan<B> {
+fn generate_plan_from_graph<B: Backend>(mut graph: InstrGraph<B>, op_graph: &OpGraph) -> Plan<B> {
     let num_instrs = graph.instrs.len();
 
     let mut indegrees = SecondaryMap::<InstrNodeId, usize>::default();
@@ -158,7 +158,7 @@ fn generate_plan_from_graph<B: Backend>(mut graph: InstrGraph<B>) -> Plan<B> {
     let mut steps: Vec<Step<B>> = Vec::new();
 
     while !stack.is_empty() {
-        let step = stack.drain(..).collect::<Vec<_>>();
+        let step = mem::take(&mut stack);
 
         for &instr_id in &step {
             for next in graph.instr_dependents(instr_id) {
@@ -184,11 +184,11 @@ fn generate_plan_from_graph<B: Backend>(mut graph: InstrGraph<B>) -> Plan<B> {
     );
 
     let mut plan = Plan { steps };
-    analyze_tensor_lifetimes(&mut plan);
+    analyze_tensor_lifetimes(&mut plan, op_graph);
     plan
 }
 
-fn analyze_tensor_lifetimes<B: Backend>(plan: &mut Plan<B>) {
+fn analyze_tensor_lifetimes<B: Backend>(plan: &mut Plan<B>, op_graph: &OpGraph) {
     let mut tensor_release_steps = Vec::<Vec<NodeId>>::new();
     tensor_release_steps.push(Vec::new()); // no frees on first step
 
@@ -208,6 +208,14 @@ fn analyze_tensor_lifetimes<B: Backend>(plan: &mut Plan<B>) {
         let mut tensors_to_release = Vec::new();
 
         for used_tensor in used_tensors {
+            if op_graph
+                .outbound_edges(used_tensor)
+                .iter()
+                .any(|id| matches!(op_graph.get(*id), Node::Output(_)))
+            {
+                continue;
+            }
+
             let mut used = false;
             for next_step in &plan.steps[i + 1..] {
                 if next_step

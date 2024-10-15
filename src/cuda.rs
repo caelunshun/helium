@@ -142,9 +142,11 @@ impl Executor<Cuda> for CudaExecutor {
 
 impl Drop for CudaExecutor {
     fn drop(&mut self) {
-        self.cx
-            .device()
-            .synchronize()
-            .expect("failed to synchronize device");
+        for stream in self.streams {
+            unsafe {
+                driver::result::stream::synchronize(stream.raw())
+                    .expect("failed to synchronize stream");
+            }
+        }
     }
 }
