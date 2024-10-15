@@ -39,12 +39,13 @@ impl Backend for Cuda {
                 node: node_id,
                 data: op.data.clone(),
             },
-            Op::Transpose(_)
+            Op::SwapDims(_)
             | Op::UnaryPointwise(_)
             | Op::BinaryPointwise(_)
             | Op::ChangeDataType(_)
             | Op::Reduce(_)
-            | Op::Broadcast(_) => {
+            | Op::Broadcast(_)
+            | Op::Reshape(_) => {
                 let subgraph = OpSubgraph::from_nodes(graph, vec![node_id]);
                 Instr::PointwiseGraph(PointwiseGraph::new(subgraph))
             }
@@ -52,10 +53,6 @@ impl Backend for Cuda {
                 let subgraph = OpSubgraph::from_nodes(graph, vec![node_id]);
                 Instr::CudnnGraph(CudnnGraph::new(subgraph))
             }
-            Op::Reshape(op) => Instr::CopyTensor {
-                from: op.input,
-                to: node_id,
-            },
         }
     }
 

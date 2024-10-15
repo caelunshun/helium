@@ -10,20 +10,19 @@ use std::hash::{Hash, Hasher};
 pub enum Op {
     UploadTensor(UploadTensor),
     Matmul(Matmul),
-    Transpose(Transpose),
     UnaryPointwise(UnaryPointwise),
     BinaryPointwise(BinaryPointwise),
     ChangeDataType(ChangeDataType),
     Reduce(Reduce),
     Broadcast(Broadcast),
     Reshape(Reshape),
+    SwapDims(SwapDims),
 }
 
 impl Op {
     pub fn inputs(&self) -> Vec<NodeId> {
         match self {
             Op::Matmul(op) => vec![op.input_a, op.input_b],
-            Op::Transpose(op) => vec![op.input],
             Op::UnaryPointwise(op) => vec![op.input],
             Op::BinaryPointwise(op) => vec![op.lhs, op.rhs],
             Op::ChangeDataType(op) => vec![op.input],
@@ -31,6 +30,7 @@ impl Op {
             Op::UploadTensor(_) => vec![],
             Op::Broadcast(op) => vec![op.input],
             Op::Reshape(op) => vec![op.input],
+            Op::SwapDims(op) => vec![op.input],
         }
     }
 
@@ -52,16 +52,6 @@ impl Op {
                 shape.set_dim_size(shape.num_dims() - 1, input_b.shape.dim_at(-1));
 
                 Descriptor { shape, ..input_a }
-            }
-            Op::Transpose(op) => {
-                let input = get_input_descriptor(op.input);
-                let mut shape = input.shape.dims().to_vec();
-                let len = shape.len();
-                shape.swap(len - 1, len - 2);
-                Descriptor {
-                    shape: Shape::new(shape),
-                    data_type: DataType::F16,
-                }
             }
             Op::UnaryPointwise(UnaryPointwise { input, .. })
             | Op::BinaryPointwise(BinaryPointwise { lhs: input, .. }) => {
@@ -92,6 +82,15 @@ impl Op {
                 let shape = op.output_shape(&input.shape);
                 Descriptor { shape, ..input }
             }
+            Op::SwapDims(op) => {
+                let input = get_input_descriptor(op.input);
+                let mut shape = input.shape.dims().to_vec();
+                shape.swap(op.axis_a, op.axis_b);
+                Descriptor {
+                    shape: Shape::new(shape),
+                    data_type: DataType::F16,
+                }
+            }
         }
     }
 
@@ -99,7 +98,7 @@ impl Op {
         match self {
             Op::UploadTensor(_) => OpKind::UploadTensor,
             Op::Matmul(_) => OpKind::Matmul,
-            Op::Transpose(_) => OpKind::Tranpose,
+            Op::SwapDims(_) => OpKind::SwapDims,
             Op::Reduce(_) => OpKind::Reduce,
             Op::UnaryPointwise(_) => OpKind::UnaryPointwise,
             Op::BinaryPointwise(_) => OpKind::BinaryPointwise,
@@ -126,7 +125,7 @@ impl Op {
                 op.input_a = mapping[op.input_a];
                 op.input_b = mapping[op.input_b];
             }
-            Op::Transpose(op) => {
+            Op::SwapDims(op) => {
                 op.input = mapping[op.input];
             }
             Op::UnaryPointwise(op) => {
@@ -156,7 +155,7 @@ impl Op {
 pub enum OpKind {
     UploadTensor,
     Matmul,
-    Tranpose,
+    SwapDims,
     Reduce,
     UnaryPointwise,
     BinaryPointwise,
@@ -171,13 +170,6 @@ pub enum OpKind {
 pub struct Matmul {
     pub input_a: NodeId,
     pub input_b: NodeId,
-}
-
-/// Batched transpose of matrices stored in the
-/// last two dimensions of the input tensor.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Transpose {
-    pub input: NodeId,
 }
 
 /// Pointwise operator with one input.
@@ -321,4 +313,11 @@ impl BroadcastAxis {
 pub struct Reshape {
     pub input: NodeId,
     pub new_shape: Shape,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SwapDims {
+    pub input: NodeId,
+    pub axis_a: usize,
+    pub axis_b: usize,
 }

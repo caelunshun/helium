@@ -178,8 +178,29 @@ impl<const D: usize> Tensor<D> {
             }
         }
 
+        self.swap_dims(D - 1, D - 2)
+    }
+
+    /// Swaps the given two dimensions.
+    pub fn swap_dims(self, axis_a: usize, axis_b: usize) -> Self {
+        assert!(
+            axis_a < D,
+            "swap_dims: axis {axis_a} out of bounds for tensor of dimension {D}"
+        );
+        assert!(
+            axis_b < D,
+            "swap_dims: axis {axis_b} out of bounds for tensor of dimension {D}"
+        );
+
         let (cx, this) = self.make_graph();
-        Self::from_op(&cx, Op::Transpose(op::Transpose { input: this }))
+        Self::from_op(
+            &cx,
+            Op::SwapDims(op::SwapDims {
+                input: this,
+                axis_a,
+                axis_b,
+            }),
+        )
     }
 
     /// Broadcasts the tensor to the given shape.

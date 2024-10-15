@@ -214,11 +214,17 @@ fn compute_node_output(
     };
 
     match op {
-        Op::Transpose(op::Transpose { input }) => {
+        Op::SwapDims(op::SwapDims {
+            input,
+            axis_a,
+            axis_b,
+        }) => {
             let new_mapping = IndexMapping::Compose {
                 first: Box::new(index_mapping.clone()),
-                second: Box::new(IndexMapping::Transpose {
+                second: Box::new(IndexMapping::SwapDims {
                     in_shape: subgraph.graph().get(*input).descriptor().shape.clone(),
+                    axis_a: *axis_a,
+                    axis_b: *axis_b,
                 }),
             };
             return compute_node_output(
@@ -421,8 +427,10 @@ struct Position {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum IndexMapping {
     Identity,
-    Transpose {
+    SwapDims {
         in_shape: Shape,
+        axis_a: usize,
+        axis_b: usize,
     },
     Broadcast {
         broadcast: Broadcast,
@@ -439,11 +447,50 @@ impl IndexMapping {
         let ident = kernel.new_ident();
         let expr = match self {
             IndexMapping::Identity => current.to_string(),
-            IndexMapping::Transpose { in_shape } => {
-                let x = in_shape.dim_at(-1);
-                let y = in_shape.dim_at(-2);
-                let stride = x * y;
-                format!("({current} % {y}) * {x} + (({current} % {stride}) / {y}) + ({current} / {stride}) * {stride}")
+            IndexMapping::SwapDims {
+                in_shape,
+                axis_a,
+                axis_b,
+            } => {
+                let temp_var = kernel.new_ident();
+
+                let mut out_shape = in_shape.dims().to_vec();
+                out_shape.swap(*axis_a, *axis_b);
+                let out_shape = Shape::new(out_shape);
+
+                let mut out_stride = 1;
+                let mut compute_dims = String::new();
+                for (i, dim_out) in out_shape.dims().iter().copied().enumerate().rev() {
+                    writeln!(
+                        compute_dims,
+                        "uint32_t coord_dim{i} = ({current} / {out_stride}) % {dim_out};"
+                    )
+                    .unwrap();
+                    out_stride *= dim_out;
+                }
+
+                let mut in_stride = 1;
+                for j in (0..in_shape.num_dims()).rev() {
+                    let k = if j == *axis_a {
+                        *axis_b
+                    } else if j == *axis_b {
+                        *axis_a
+                    } else {
+                        j
+                    };
+                    writeln!(compute_dims, "in_index += coord_dim{k} * {in_stride};").unwrap();
+                    in_stride *= in_shape.dims()[j];
+                }
+
+                kernel.statement(formatdoc! {"
+                    uint32_t {temp_var};
+                    {{
+                        uint32_t in_index = 0;
+                        {compute_dims}
+                        {temp_var} = in_index;
+                    }}
+                "});
+                temp_var
             }
             IndexMapping::Broadcast {
                 broadcast,

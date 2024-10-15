@@ -18,7 +18,6 @@ pub mod pointwise;
 #[derive(Debug, Clone)]
 pub enum Instr {
     UploadTensor { node: NodeId, data: DataVec },
-    CopyTensor { from: NodeId, to: NodeId },
     CudnnGraph(CudnnGraph),
     PointwiseGraph(PointwiseGraph),
 }
@@ -40,12 +39,6 @@ impl Instr {
                     .initialize_with_data(data, stream)
                     .expect("failed to copy data");
             }
-            Instr::CopyTensor { from, to } => {
-                tensors
-                    .get_storage(*to)
-                    .copy_from(tensors.get_storage(*from), stream)
-                    .expect("failed to copy data");
-            }
         }
     }
 }
@@ -56,7 +49,6 @@ impl Instruction<Cuda> for Instr {
             Instr::UploadTensor { .. } => vec![],
             Instr::CudnnGraph(instr) => instr.inputs(),
             Instr::PointwiseGraph(instr) => instr.inputs(),
-            Instr::CopyTensor { from, .. } => vec![*from],
         }
     }
 
@@ -65,7 +57,6 @@ impl Instruction<Cuda> for Instr {
             Instr::UploadTensor { node, .. } => vec![*node],
             Instr::CudnnGraph(instr) => instr.outputs(),
             Instr::PointwiseGraph(instr) => instr.outputs(),
-            Instr::CopyTensor { to, .. } => vec![*to],
         }
     }
 
@@ -91,7 +82,7 @@ impl Instruction<Cuda> for Instr {
         match self {
             Instr::CudnnGraph(instr) => instr.perf(),
             Instr::PointwiseGraph(instr) => instr.perf(),
-            Instr::UploadTensor { .. } | Instr::CopyTensor { .. } => InstrPerf::MemoryBound,
+            Instr::UploadTensor { .. } => InstrPerf::MemoryBound,
         }
     }
 }

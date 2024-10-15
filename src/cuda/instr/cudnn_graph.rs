@@ -157,7 +157,7 @@ impl CudnnGraph {
                     .expect("failed to build matmul op"),
                 );
             }
-            Op::Transpose(_) => todo!(),
+            Op::SwapDims(_) => todo!(),
             Op::UnaryPointwise(op) => {
                 let mode = Self::map_unary_pointwise_op(op.op);
                 builder.add_op(
