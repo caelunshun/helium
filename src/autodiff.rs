@@ -89,6 +89,26 @@ impl<const D: usize> AdTensor<D> {
         }
     }
 
+    pub fn reduce_mean<const D2: usize>(self, depth: u32) -> AdTensor<D2> {
+        let input_shape = self.tensor.shape();
+        let stride = input_shape[input_shape.len() - depth as usize..]
+            .iter()
+            .copied()
+            .product::<usize>();
+        let result: Tensor<D2> = self.tensor.reduce_sum(depth);
+
+        let tape = self.tape.append_unary(move |flow: Tensor<D2>| {
+            let mut new_shape = [1usize; D];
+            new_shape[..D2].copy_from_slice(&input_shape[..D2]);
+            flow.broadcast_to(new_shape) * (stride as f32).recip()
+        });
+
+        AdTensor {
+            tensor: result,
+            tape,
+        }
+    }
+
     pub fn backward(self) -> Gradients {
         let shape = self.tensor.shape();
         let ones = Tensor::from_vec(

@@ -24,21 +24,31 @@ fn autodiff_scalar() {
 }
 
 #[test]
-fn reduce_sum() {
+fn reduce_sum_mean() {
     let param = Param::new(Tensor::<1>::from_array([10.0f32; 10], DEVICE));
     let input = AdTensor::new(Tensor::<1>::from_array([2.0f32; 10], DEVICE));
 
-    let result = (input * param.clone()).reduce_sum::<1>(1) * 3.0;
+    let result_sum = (input.clone() * param.clone()).reduce_sum::<1>(1) * 3.0;
+    let result_mean = (input * param.clone()).reduce_mean::<1>(1) * 3.0;
 
-    let backward = result.backward();
-
+    let backward_sum = result_sum.backward();
     assert_ulps_eq!(
-        backward
+        backward_sum
             .get::<1>(param.id())
             .clone()
             .into_vec::<f32>()
             .as_slice(),
         &[6.0f32; 10][..]
+    );
+
+    let backward_mean = result_mean.backward();
+    assert_ulps_eq!(
+        backward_mean
+            .get::<1>(param.id())
+            .clone()
+            .into_vec::<f32>()
+            .as_slice(),
+        &[0.6f32; 10][..]
     );
 }
 
