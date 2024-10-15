@@ -73,7 +73,6 @@ impl KernelBuilder {
         Self::default()
     }
 
-    #[expect(unused)]
     pub fn include(&mut self, header: &str) -> &mut Self {
         if !self.include_headers.iter().any(|h| h == header) {
             self.include_headers.push(header.to_owned());
@@ -97,6 +96,11 @@ impl KernelBuilder {
 
     pub fn statement(&mut self, statement: impl AsRef<str>) -> &mut Self {
         self.statements.push(statement.as_ref().to_owned());
+        self
+    }
+
+    pub fn item(&mut self, item: impl AsRef<str>) -> &mut Self {
+        self.items.push(item.as_ref().to_owned());
         self
     }
 

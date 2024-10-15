@@ -22,7 +22,7 @@ fn add() {
 }
 
 #[test]
-fn add_with_broadcaast() {
+fn add_with_broadcast() {
     let a = Tensor::<2>::from_array([[3.0f32; 5]; 5], DEVICE);
     let b = Tensor::<1>::from_array([1.0f32], DEVICE);
 
@@ -293,12 +293,12 @@ fn matmul_batched() {
 #[test]
 fn broadcast() {
     let x = Tensor::<2>::from_array([[1.0], [2.0]], DEVICE);
-    let result = x.broadcast_to([2, 4]);
+    let result = x.broadcast_to([2, 2, 4]);
 
-    assert_eq!(result.shape(), [2, 4]);
+    assert_eq!(result.shape(), [2, 2, 4]);
     assert_eq!(
         result.into_vec::<f32>().as_slice(),
-        &[1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0][..]
+        &[1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0, 1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0][..]
     );
 }
 

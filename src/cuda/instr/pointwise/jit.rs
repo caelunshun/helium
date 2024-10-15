@@ -1,14 +1,15 @@
 use crate::{
     cuda::kernel_jit::{Ident, KernelBuilder, KernelParam},
     opgraph::{
-        op::{self, BinaryPointwiseOp, Broadcast, Op, UnaryPointwiseOp},
+        op::{self, BinaryPointwiseOp, Broadcast, Op, ReduceOp, UnaryPointwiseOp},
         subgraph::OpSubgraph,
         Intermediate, Node, NodeId,
     },
     shape::Shape,
+    DataType,
 };
 use ahash::AHashMap;
-use indoc::formatdoc;
+use indoc::{formatdoc, indoc};
 use std::fmt::Write;
 
 pub const BLOCK_SIZE: usize = 256;
@@ -30,7 +31,24 @@ pub fn generate_kernel(subgraph: &OpSubgraph) -> KernelBuilder {
 
     if is_reduction_graph(subgraph) {
         kernel.statement(format!("__shared__ float reduction_mem[{BLOCK_SIZE}];"));
-        //kernel.register_shared_memory_bytes((BLOCK_SIZE * mem::size_of::<f32>()) as u32);
+        kernel.include("math_constants.h");
+        kernel.item(indoc! {"
+        __device__ __forceinline__ float atomicMinFloat(float *addr, float value) {
+            float old;
+            old = (value >= 0) ? __int_as_float(atomicMin((int *)addr, __float_as_int(value))) :
+                __uint_as_float(atomicMax((unsigned int *)addr, __float_as_uint(value)));
+    
+            return old;
+        }
+
+        __device__ __forceinline__ float atomicMaxFloat(float *addr, float value) {
+            float old;
+            old = (value >= 0) ? __int_as_float(atomicMax((int *)addr, __float_as_int(value))) :
+                __uint_as_float(atomicMin((unsigned int *)addr, __float_as_uint(value)));
+    
+            return old;
+        }
+        "});
     }
 
     let ReductionStrides { group_size, .. } = compute_reduction_stride(subgraph);
@@ -39,6 +57,7 @@ pub fn generate_kernel(subgraph: &OpSubgraph) -> KernelBuilder {
     let group_size_rounded_up =
         (group_size + threads_per_group - 1) / threads_per_group * threads_per_group;
 
+    kernel.statement(format!("uint32_t group_size = {group_size};"));
     kernel.statement(format!(
         "uint32_t group = (blockDim.x * blockIdx.x) / {group_size_rounded_up};"
     ));
@@ -51,7 +70,11 @@ pub fn generate_kernel(subgraph: &OpSubgraph) -> KernelBuilder {
     kernel.statement(format!(
         "uint32_t out_index = {group_size} * group + index_in_group;"
     ));
-    kernel.statement(format!("if (index_in_group >= {group_size}) return;"));
+    kernel.statement(format!("bool active = index_in_group < {group_size};"));
+    kernel.statement(format!(
+        "uint32_t active_mask = __ballot_sync(0xffffffff, active);"
+    ));
+    kernel.statement(format!("if (!active) return;"));
 
     for output in subgraph.leafs() {
         let val = compute_node_output(
@@ -63,10 +86,21 @@ pub fn generate_kernel(subgraph: &OpSubgraph) -> KernelBuilder {
             &mut kernel,
             &mut cx,
         );
-        let dtype = subgraph.graph().get(output).descriptor().data_type;
-        let param = kernel.param(KernelParam::Output(output), dtype);
-        let typ = KernelBuilder::cpp_data_type(dtype);
-        kernel.statement(format!("{param}[out_index] = static_cast<{typ}>({val});"));
+
+        // Store result to memory.
+        // If a reduction, then the store was already performed in compute_node_output.
+        if !matches!(
+            subgraph.graph().get(output),
+            Node::Intermediate(Intermediate {
+                op: Op::Reduce(_),
+                ..
+            })
+        ) {
+            let dtype = subgraph.graph().get(output).descriptor().data_type;
+            let param = kernel.param(KernelParam::Output(output), dtype);
+            let typ = KernelBuilder::cpp_data_type(dtype);
+            kernel.statement(format!("{param}[out_index] = static_cast<{typ}>({val});"));
+        }
     }
 
     kernel
@@ -95,7 +129,7 @@ fn compute_reduction_stride(subgraph: &OpSubgraph) -> ReductionStrides {
         }) = subgraph.graph().get(node)
         {
             let group_size = output_shape.dims()
-                [output_shape.num_dims() - reduce.depth as usize - 1..]
+                [(output_shape.num_dims() - reduce.depth as usize)..]
                 .iter()
                 .copied()
                 .product();
@@ -260,7 +294,62 @@ fn compute_node_output(
                 binary_pointwise_op(&lhs, &rhs, *op)
             ));
         }
-        Op::Reduce(_) => todo!(),
+        Op::Reduce(op) => {
+            let mut input = compute_node_output(
+                subgraph,
+                &Position {
+                    node: op.input,
+                    index_mapping: index_mapping.clone(),
+                },
+                kernel,
+                cx,
+            );
+            let reduced_val = kernel.new_ident();
+            if op.op == ReduceOp::Mean {
+                let coefficient = (compute_reduction_stride(subgraph).group_size as f64).recip();
+                let new_input = kernel.new_ident();
+                kernel.statement(format!("float {new_input} = {input} * {coefficient};"));
+                input = new_input;
+            }
+
+            let reduce_block_level = reduce_op(&reduced_val, "reduction_mem[partner_idx]", op.op);
+            let reduce_warp_level = reduce_op(&reduced_val, "partner", op.op);
+
+            let output = kernel.param(KernelParam::Output(node), DataType::F32);
+            let reduce_grid_level =
+                atomic_reduce(&reduced_val, &format!("{output} + group"), op.op);
+
+            kernel.statement(formatdoc! {"
+            // Block-level reduction
+            float {reduced_val} = {input};
+            for (uint32_t offset = {BLOCK_SIZE} / 2; offset >= 32; offset /= 2) {{
+                reduction_mem[threadIdx.x] = {reduced_val};
+                __syncthreads();
+                if (threadIdx.x < offset) {{
+                    if (index_in_group + offset < group_size) {{
+                        uint32_t partner_idx = threadIdx.x + offset;
+                        {reduced_val} = {reduce_block_level};
+                    }}
+                }}
+            }}
+
+            // Warp-level reduction (last 32 elements in block)
+            __syncthreads();
+            if (threadIdx.x < 32) {{
+                for (uint32_t offset = 16; offset > 0; offset /= 2) {{
+                    float partner = __shfl_down_sync(active_mask, {reduced_val}, offset);
+                    if (index_in_group + offset < group_size) {{
+                        {reduced_val} = {reduce_warp_level};
+                    }}
+                }}
+
+                // Grid-level reduction across blocks
+                if (threadIdx.x == 0) {{
+                    {reduce_grid_level}
+                }}
+            }}
+            "});
+        }
         // No-ops in the context of pointwise kernel
         // (ChangeDataType happens when loading inputs / storing
         // outputs, all compute is in float32)
@@ -305,6 +394,22 @@ fn binary_pointwise_op(lhs: &str, rhs: &str, op: BinaryPointwiseOp) -> String {
     }
 }
 
+fn reduce_op(a: &str, b: &str, op: ReduceOp) -> String {
+    match op {
+        ReduceOp::Sum | ReduceOp::Mean => format!("{a} + {b}"),
+        ReduceOp::Max => format!("fmaxf({a}, {b})"),
+        ReduceOp::Min => format!("fminf({a}, {b})"),
+    }
+}
+
+fn atomic_reduce(val: &str, addr: &str, op: ReduceOp) -> String {
+    match op {
+        ReduceOp::Sum | ReduceOp::Mean => format!("atomicAdd({addr}, {val});"),
+        ReduceOp::Max => format!("atomicMaxFloat({addr}, {val});"),
+        ReduceOp::Min => format!("atomicMinFloat({addr}, {val});"),
+    }
+}
+
 /// Memoization key.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct Position {
@@ -333,7 +438,7 @@ impl IndexMapping {
     pub fn derive_index(&self, current: &str, kernel: &mut KernelBuilder) -> Ident {
         let ident = kernel.new_ident();
         let expr = match self {
-            IndexMapping::Identity => format!("{current}"),
+            IndexMapping::Identity => current.to_string(),
             IndexMapping::Transpose { in_shape } => {
                 let x = in_shape.dim_at(-1);
                 let y = in_shape.dim_at(-2);

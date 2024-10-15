@@ -8,7 +8,7 @@ use crate::{
 };
 use cudarc::{driver, driver::sys::CUdeviceptr};
 use half::{bf16, f16};
-use std::sync::Arc;
+use std::{mem, sync::Arc};
 
 #[derive(Clone)]
 pub struct TensorStorage {
@@ -50,6 +50,42 @@ impl TensorStorage {
                 self.memory.len() as usize,
                 stream.raw() as _,
             )?;
+        }
+        Ok(())
+    }
+
+    pub fn fill(&self, value: f32, stream: &CudaStream) -> Result<(), CudaError> {
+        match self.data_type {
+            DataType::F16 => unsafe {
+                driver::sys::lib()
+                    .cuMemsetD16Async(
+                        self.device_ptr(),
+                        f16::from_f32(value).to_bits(),
+                        (self.memory.len() / mem::size_of::<f32>() as u64) as usize,
+                        stream.raw(),
+                    )
+                    .result()?;
+            },
+            DataType::Bf16 => unsafe {
+                driver::sys::lib()
+                    .cuMemsetD16Async(
+                        self.device_ptr(),
+                        bf16::from_f32(value).to_bits(),
+                        (self.memory.len() / mem::size_of::<f32>() as u64) as usize,
+                        stream.raw(),
+                    )
+                    .result()?;
+            },
+            DataType::F32 => unsafe {
+                driver::sys::lib()
+                    .cuMemsetD32Async(
+                        self.device_ptr(),
+                        value.to_bits(),
+                        (self.memory.len() / mem::size_of::<f32>() as u64) as usize,
+                        stream.raw(),
+                    )
+                    .result()?;
+            },
         }
         Ok(())
     }

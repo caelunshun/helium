@@ -23,12 +23,15 @@ struct alignas(8) half4 {
 };
 
 
-__global__ void test(__nv_bfloat16 *ident0, __half *ident1, __nv_bfloat16 *ident11, __half *ident15) {
-    uint32_t group = (blockDim.x * blockIdx.x) / 512;
+extern "C" __global__ void test(__nv_bfloat16 *ident0, __half *ident1, __nv_bfloat16 *ident11, __half *ident15) {
+    uint32_t group_size = 500;
+uint32_t group = (blockDim.x * blockIdx.x) / 512;
 uint32_t block_group_start = blockIdx.x / 2 * 2;
 uint32_t index_in_group = (blockIdx.x - block_group_start) * blockDim.x + threadIdx.x;
 uint32_t out_index = 500 * group + index_in_group;
-if (index_in_group >= 500) return;
+bool active = index_in_group < 500;
+uint32_t active_mask = __ballot_sync(0xffffffff, active);
+if (!active) return;
 uint32_t ident4 = out_index;
 float ident3 = static_cast<float>(ident0[ident4]);
 uint32_t ident8 = out_index;

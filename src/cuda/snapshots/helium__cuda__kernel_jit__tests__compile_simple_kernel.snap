@@ -23,7 +23,7 @@ struct alignas(8) half4 {
 };
 
 
-__global__ void copy_kernel(__nv_bfloat16 *ident0, __half *ident1) {
+extern "C" __global__ void copy_kernel(__nv_bfloat16 *ident0, __half *ident1) {
     uint32_t i = threadIdx.x + blockDim.x * blockIdx.x;
 ident0[i] = static_cast<__nv_bfloat16>(static_cast<float>(ident1[i]));
 }

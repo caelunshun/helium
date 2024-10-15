@@ -4,7 +4,11 @@ use crate::{
         context::{CudaContext, CudaStream},
         Cuda,
     },
-    opgraph::{subgraph::OpSubgraph, NodeId, OpGraph},
+    opgraph::{
+        op::{Op, ReduceOp},
+        subgraph::OpSubgraph,
+        Intermediate, Node, NodeId, OpGraph,
+    },
 };
 use std::sync::Arc;
 
@@ -30,6 +34,20 @@ impl PointwiseGraph {
     }
 
     pub fn execute(&self, tensors: &TensorMap<Cuda>, stream: &CudaStream, cx: &CudaContext) {
+        // Reduction outputs need to be initialized to their
+        // initial values (e.g. zero for sum, -inf for max).
+        for output in self.subgraph.leafs() {
+            if let Node::Intermediate(Intermediate {
+                op: Op::Reduce(op), ..
+            }) = self.subgraph.graph().get(output)
+            {
+                tensors
+                    .get_storage(output)
+                    .fill(initial_reduction_val(op.op), stream)
+                    .expect("failed to fill reduction tensor with initial value");
+            }
+        }
+
         let kernel = jit::generate_kernel(&self.subgraph)
             .build("pointwise_kernel", cx)
             .expect("failed to compile kernel");
@@ -65,5 +83,13 @@ impl Instruction<Cuda> for PointwiseGraph {
 
     fn perf(&self) -> InstrPerf {
         InstrPerf::MemoryBound
+    }
+}
+
+fn initial_reduction_val(op: ReduceOp) -> f32 {
+    match op {
+        ReduceOp::Sum | ReduceOp::Mean => 0.0,
+        ReduceOp::Max => f32::NEG_INFINITY,
+        ReduceOp::Min => f32::INFINITY,
     }
 }
