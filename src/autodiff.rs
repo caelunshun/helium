@@ -44,6 +44,36 @@ impl<const D: usize> AdTensor<D> {
         }
     }
 
+    pub fn pow(self, power: Self) -> Self {
+        let input = self.tensor.clone();
+        let power_clone = power.tensor.clone();
+        let result = self.tensor.pow(power.tensor);
+
+        let tape = self.tape.append_unary(move |flow: Tensor<D>| {
+            input.clone().pow(power_clone.clone() - 1.0) * power_clone.clone() * flow
+        });
+
+        Self {
+            tape,
+            tensor: result,
+        }
+    }
+
+    pub fn sigmoid(self) -> Self {
+        let input = self.tensor.clone();
+        let result = self.tensor.sigmoid();
+
+        let tape = self.tape.append_unary(move |flow: Tensor<D>| {
+            let exp = input.clone().exp();
+            exp.clone() / (exp + 1.0).pow_scalar(2.0) * flow
+        });
+
+        Self {
+            tape,
+            tensor: result,
+        }
+    }
+
     pub fn matmul(self, rhs: Self) -> Self {
         let result = self.tensor.clone().matmul(rhs.tensor.clone());
 
@@ -57,17 +87,6 @@ impl<const D: usize> AdTensor<D> {
         );
 
         Self {
-            tape,
-            tensor: result,
-        }
-    }
-
-    pub fn broadcast_to<const D2: usize>(self, new_shape: [usize; D2]) -> AdTensor<D2> {
-        let result = self.tensor.broadcast_to(new_shape);
-
-        let tape = todo!();
-
-        AdTensor {
             tape,
             tensor: result,
         }

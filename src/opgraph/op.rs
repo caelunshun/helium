@@ -189,6 +189,9 @@ pub enum UnaryPointwiseOp {
     Tan,
     Sigmoid,
     Tanh,
+    Relu,
+    Sqrt,
+    Log,
 }
 
 /// Pointwise operator with two inputs.

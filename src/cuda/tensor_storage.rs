@@ -48,19 +48,6 @@ impl TensorStorage {
         Ok(())
     }
 
-    pub fn copy_from(&self, other: &TensorStorage, stream: &CudaStream) -> Result<(), CudaError> {
-        assert_eq!(self.memory.len(), other.memory.len());
-        unsafe {
-            driver::result::memcpy_dtod_async(
-                self.memory.device_ptr(),
-                other.memory.device_ptr(),
-                self.memory.len() as usize,
-                stream.raw() as _,
-            )?;
-        }
-        Ok(())
-    }
-
     pub fn fill(&self, value: f32, stream: &CudaStream) -> Result<(), CudaError> {
         match self.data_type {
             DataType::F16 => unsafe {

@@ -387,6 +387,9 @@ fn unary_pointwise_op(input: &str, op: UnaryPointwiseOp) -> String {
         UnaryPointwiseOp::Tan => format!("tanf({input})"),
         UnaryPointwiseOp::Sigmoid => format!("1.0f / (1.0f + expf(-{input})"),
         UnaryPointwiseOp::Tanh => format!("tanhf({input})"),
+        UnaryPointwiseOp::Relu => format!("fmaxf({input}, 0.0)"),
+        UnaryPointwiseOp::Log => format!("logf({input})"),
+        UnaryPointwiseOp::Sqrt => format!("sqrtf({input})"),
     }
 }
 

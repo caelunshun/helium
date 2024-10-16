@@ -270,6 +270,40 @@ impl<const D: usize> Tensor<D> {
         self.pow(rhs)
     }
 
+    /// Natural logarithm.
+    pub fn log(self) -> Self {
+        self.op_unary_pointwise(UnaryPointwiseOp::Log)
+    }
+
+    /// `e^self`.`
+    pub fn exp(self) -> Self {
+        self.op_unary_pointwise(UnaryPointwiseOp::Exp)
+    }
+
+    pub fn sin(self) -> Self {
+        self.op_unary_pointwise(UnaryPointwiseOp::Sin)
+    }
+
+    pub fn cos(self) -> Self {
+        self.op_unary_pointwise(UnaryPointwiseOp::Cos)
+    }
+
+    pub fn tan(self) -> Self {
+        self.op_unary_pointwise(UnaryPointwiseOp::Tan)
+    }
+
+    pub fn sqrt(self) -> Self {
+        self.op_unary_pointwise(UnaryPointwiseOp::Sqrt)
+    }
+
+    pub fn sigmoid(self) -> Self {
+        self.op_unary_pointwise(UnaryPointwiseOp::Sigmoid)
+    }
+
+    pub fn relu(self) -> Self {
+        self.op_unary_pointwise(UnaryPointwiseOp::Relu)
+    }
+
     /// Performs sum reduction along the last `depth` dimensions
     /// of the tensor. The last `depth` dimensions are replaced
     /// with a single dimension of length 1.
@@ -542,7 +576,7 @@ impl<const D: usize> Tensor<D> {
         assert_eq!(
             self.shape(),
             rhs.shape(),
-            "shape mismatch for binary op: lhs has shape {:?} while rhs has shape {:?}",
+            "shape mismatch for binary op {op:?}: lhs has shape {:?} while rhs has shape {:?}",
             self.shape(),
             rhs.shape()
         );

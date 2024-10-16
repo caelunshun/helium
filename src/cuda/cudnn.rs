@@ -443,6 +443,7 @@ pub enum PointwiseMode {
     Recip,
     Tanh,
     Sigmoid,
+    Relu,
 }
 
 impl PointwiseMode {
@@ -473,6 +474,7 @@ impl PointwiseMode {
             PointwiseMode::Recip => CUDNN_POINTWISE_RECIPROCAL,
             PointwiseMode::Tanh => CUDNN_POINTWISE_TANH_FWD,
             PointwiseMode::Sigmoid => CUDNN_POINTWISE_SIGMOID_FWD,
+            PointwiseMode::Relu => CUDNN_POINTWISE_RELU_FWD,
         }
     }
 }

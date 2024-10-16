@@ -201,6 +201,9 @@ impl CudnnGraph {
             UnaryPointwiseOp::Tan => PointwiseMode::Tan,
             UnaryPointwiseOp::Sigmoid => PointwiseMode::Sigmoid,
             UnaryPointwiseOp::Tanh => PointwiseMode::Tanh,
+            UnaryPointwiseOp::Relu => PointwiseMode::Relu,
+            UnaryPointwiseOp::Log => PointwiseMode::Log,
+            UnaryPointwiseOp::Sqrt => PointwiseMode::Sqrt,
         }
     }
 
