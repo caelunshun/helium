@@ -1,6 +1,6 @@
 use crate::{
     cuda::{
-        allocator::Memory,
+        allocator::{Memory, StreamId},
         context::{CudaContext, CudaStream},
         error::CudaError,
     },
@@ -17,11 +17,18 @@ pub struct TensorStorage {
 }
 
 impl TensorStorage {
-    pub fn new(data_type: DataType, len: usize, cx: &CudaContext) -> Result<Self, CudaError> {
+    pub fn new(
+        data_type: DataType,
+        len: usize,
+        cx: &CudaContext,
+        allocation_stream: StreamId,
+    ) -> Result<Self, CudaError> {
         const ALIGN: u64 = 64;
-        let memory = cx
-            .allocator()
-            .alloc(len as u64 * data_type.size() as u64, ALIGN)?;
+        let memory = cx.allocator().allocate_in_stream(
+            len as u64 * data_type.size() as u64,
+            ALIGN,
+            allocation_stream,
+        )?;
         Ok(Self {
             memory: Arc::new(memory),
             data_type,

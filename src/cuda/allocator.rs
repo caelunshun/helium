@@ -1,5 +1,5 @@
 use crate::cuda::{
-    allocator::block::{Block, BlockAllocator},
+    allocator::block::{Block, BlockAllocator, PageId},
     error::CudaError,
 };
 use cudarc::{
@@ -7,9 +7,12 @@ use cudarc::{
     driver::sys::{CUcontext, CUdeviceptr},
 };
 use parking_lot::Mutex;
-use std::{collections::BTreeMap, sync::Arc};
+use slotmap::SecondaryMap;
+use std::sync::Arc;
 
 mod block;
+
+pub use block::StreamId;
 
 /// Pooling allocator for a CUDA device.
 ///
@@ -18,9 +21,7 @@ mod block;
 pub struct CudaAllocator {
     context: CUcontext,
     block_allocator: BlockAllocator,
-    /// Pages sorted by their virtual starting address.
-    pages: BTreeMap<u64, Page>,
-
+    pages: SecondaryMap<PageId, Page>,
     dropped_memories: Arc<Mutex<Vec<Block>>>,
 }
 
@@ -37,17 +38,60 @@ impl CudaAllocator {
     /// # Safety
     /// `context` must outlive `self`.
     pub unsafe fn new(context: CUcontext) -> Self {
-        let block_allocator = BlockAllocator::new(Self::MIN_PAGE_SIZE);
         Self {
-            pages: BTreeMap::new(),
-            block_allocator,
+            pages: SecondaryMap::default(),
+            block_allocator: BlockAllocator::new(),
             dropped_memories: Arc::new(Mutex::new(Vec::new())),
             context,
         }
     }
 
     /// Allocate some memory.
-    pub fn alloc(&mut self, size: u64, align: u64) -> Result<Memory, CudaError> {
+    ///
+    /// Note: when dropped on the host side,
+    /// the freed memory becomes immediately available
+    /// to all threads. When used in combination
+    /// with asynchronous CUDA streams, this can cause bugs as the GPU
+    /// may still be using the allocated memory. In this case,
+    /// use `allocate_in_stream` instead.
+    pub fn allocate(&mut self, size: u64, align: u64) -> Result<Memory, CudaError> {
+        self.allocate_internal(size, align, None)
+    }
+
+    /// Allocate some memory with lifetime at least
+    /// as long as the given stream.
+    ///
+    /// When dropped, the freed memory only becomes available
+    /// to allocations in the same stream. Other streams
+    /// cannot use the memory until `end_stream()` is called,
+    /// indicating that the GPU has finished use of the memory.
+    pub fn allocate_in_stream(
+        &mut self,
+        size: u64,
+        align: u64,
+        stream: StreamId,
+    ) -> Result<Memory, CudaError> {
+        self.allocate_internal(size, align, Some(stream))
+    }
+
+    /// Creates a new stream ID for use with `allocate_in_stream`.
+    pub fn begin_stream(&mut self) -> StreamId {
+        self.block_allocator.begin_stream()
+    }
+
+    /// Signals that a stream has completed execution and thus
+    /// any memory allocated on that stream that has been freed
+    /// can be reused by other streams.
+    pub fn end_stream(&mut self, stream: StreamId) {
+        self.block_allocator.end_stream(stream);
+    }
+
+    fn allocate_internal(
+        &mut self,
+        size: u64,
+        align: u64,
+        stream: Option<StreamId>,
+    ) -> Result<Memory, CudaError> {
         assert!(size > 0);
         assert!(align > 0);
         assert!(align.is_power_of_two());
@@ -59,22 +103,22 @@ impl CudaAllocator {
 
         self.process_dropped_memories();
 
-        let block = self.block_allocator.alloc(size, align);
-        let page = self.pages.range(..=block.addr).last();
-
-        let page = match page {
-            Some((_, page)) if block.addr + block.size <= page.start + page.size => page,
-            _ => {
-                // Need to allocate a new page.
-                self.allocate_page_for_at_least(size)?
+        let block: Block = match self
+            .block_allocator
+            .allocate_with_opt_stream(size, align, stream)
+        {
+            Some(b) => b,
+            None => {
+                self.allocate_page_for_at_least(size)?;
+                self.block_allocator
+                    .allocate(size, align)
+                    .expect("new page should accommodate allocation")
             }
         };
+        let page = &self.pages[block.page];
+        let ptr = page.ptr + block.start;
 
-        let offset_in_page = block.addr - page.start;
-        let ptr = page.ptr + offset_in_page;
-
-        debug_assert!(offset_in_page < page.size);
-        debug_assert!(offset_in_page + size < page.size,);
+        debug_assert!(block.start + size < page.size);
 
         Ok(Memory {
             ptr,
@@ -86,7 +130,7 @@ impl CudaAllocator {
 
     fn process_dropped_memories(&mut self) {
         for block in self.dropped_memories.lock().drain(..) {
-            self.block_allocator.dealloc(block);
+            self.block_allocator.deallocate(block);
         }
     }
 
@@ -98,13 +142,10 @@ impl CudaAllocator {
             driver::result::memset_d8_sync(ptr, 0, size.try_into().unwrap())?;
         }
 
-        let start = self
-            .pages
-            .last_key_value()
-            .map(|(_, page)| page.start + page.size)
-            .unwrap_or(0);
-        self.pages.insert(start, Page { start, size, ptr });
-        Ok(&self.pages[&start])
+        let page = Page { size, ptr };
+        let page_id = self.block_allocator.add_page(size);
+        self.pages.insert(page_id, page);
+        Ok(&self.pages[page_id])
     }
 }
 
@@ -137,7 +178,6 @@ impl Drop for Memory {
 /// Allocated page of CUDA memory.
 struct Page {
     ptr: CUdeviceptr,
-    start: u64,
     size: u64,
 }
 
@@ -169,7 +209,7 @@ mod tests {
             if rng.gen_bool(0.5) || allocated_memories.is_empty() {
                 let size = rng.gen_range(4..=64 * 1024 * 1024);
                 let align = rng.gen_range(1u64..=256).next_power_of_two();
-                let memory = allocator.alloc(size, align).unwrap();
+                let memory = allocator.allocate(size, align).unwrap();
                 assert!(!allocated_memories.iter().any(|mem| {
                     (mem.device_ptr() <= memory.device_ptr()
                         && memory.device_ptr() < mem.device_ptr() + mem.len())

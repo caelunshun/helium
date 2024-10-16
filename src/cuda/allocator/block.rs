@@ -1,295 +1,343 @@
-use std::{collections::BTreeMap, mem};
+use slotmap::SlotMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-/// Allocator operating on a generalized address space,
-/// represented by ranges of integers.
-///
-/// Allocation and deallocation are average-case O(log n) in the number
-/// of blocks.
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct BlockAllocator {
-    free_blocks_by_size: BTreeMap<BlockSize, Vec<Block>>,
-    free_blocks_by_addr: BTreeMap<BlockAddr, Block>,
-    end_address: u64,
-    #[cfg(debug_assertions)]
-    allocated_blocks: ahash::AHashSet<Block>,
-    page_size: u64,
+    pages: SlotMap<PageId, Page>,
+    free_blocks: SlotMap<BlockId, Block>,
+    streams: SlotMap<StreamId, Stream>,
+    /// Acceleration structure storing all blocks
+    /// across all pages, ordered by size.
+    free_blocks_by_size: BTreeMap<BlockSize, BTreeSet<BlockId>>,
 }
 
 impl BlockAllocator {
-    pub fn new(page_size: u64) -> Self {
-        assert!(page_size > 0);
-        Self {
-            page_size,
-            ..Default::default()
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    /// Allocates a block of the given size and alignment, returning
-    /// the block address and size;
-    pub fn alloc(&mut self, size: u64, align: u64) -> Block {
+    /// Adds a new page with the given size.
+    pub fn add_page(&mut self, size: u64) -> PageId {
+        let page = self.pages.insert(Page::default());
+
+        let new_block = Block {
+            page,
+            start: 0,
+            size,
+            free_only_in_stream: None,
+        };
+        self.add_free_block(new_block);
+
+        page
+    }
+
+    pub fn allocate(&mut self, size: u64, align: u64) -> Option<Block> {
+        self.allocate_with_opt_stream(size, align, None)
+    }
+
+    #[allow(unused)]
+    pub fn allocate_in_stream(&mut self, size: u64, align: u64, stream: StreamId) -> Option<Block> {
+        self.allocate_with_opt_stream(size, align, Some(stream))
+    }
+
+    pub fn allocate_with_opt_stream(
+        &mut self,
+        size: u64,
+        align: u64,
+        stream: Option<StreamId>,
+    ) -> Option<Block> {
         assert!(size > 0);
         assert!(align.is_power_of_two());
 
-        // Try to find the smallest block satisfying the constraints;
-        // if none found, then we add more used space.
-        let mut valid_block = None;
-        for block in self.free_blocks_by_size.range(size..).flat_map(|(_, b)| b) {
-            let align_offset = align_offset(block.addr, align);
-            let Some(effective_size) = block.size.checked_sub(align_offset) else {
-                continue;
-            };
-            if effective_size >= size {
-                valid_block = Some((*block, align_offset));
-                break;
+        for (_, size_class) in self.free_blocks_by_size.range(size..) {
+            for &block_id in size_class {
+                let mut block = self.free_blocks[block_id];
+
+                if block.free_only_in_stream.is_some() && block.free_only_in_stream != stream {
+                    continue;
+                }
+
+                let offset = block.align_offset(align);
+                if offset > block.size || (block.size - offset) < size {
+                    continue;
+                }
+
+                self.remove_free_block(block_id);
+
+                if offset != 0 {
+                    let (unused, new_block) = block.split(offset);
+                    self.add_free_block(unused);
+                    block = new_block;
+                }
+
+                let remainder = block.size - size;
+                if remainder > 0 {
+                    let (new_block, unused) = block.split(block.size - remainder);
+                    self.add_free_block(unused);
+                    block = new_block;
+                }
+
+                block.free_only_in_stream = stream;
+                return Some(block);
             }
         }
 
-        let (mut block, align_offset) = match valid_block {
-            Some(b) => b,
-            None => return self.alloc_at_end(size, align),
-        };
-
-        self.remove_free_block(block);
-
-        if align_offset > 0 {
-            let (unused, new_block) = block.split(align_offset);
-            self.add_free_block(unused);
-            block = new_block;
-        }
-
-        if block.size > size {
-            let (new_block, unused) = block.split(size);
-            self.add_free_block(unused);
-            block = new_block;
-        }
-
-        #[cfg(debug_assertions)]
-        assert!(!self.allocated_blocks.iter().any(|b| b.overlaps(block)));
-        #[cfg(debug_assertions)]
-        self.allocated_blocks.insert(block);
-
-        block
+        None
     }
 
-    fn alloc_at_end(&mut self, size: u64, align: u64) -> Block {
-        let fits_in_page = ((self.end_address + size) / self.page_size
-            == self.end_address / self.page_size)
-            || self.end_address % self.page_size == 0;
-        if !fits_in_page {
-            let align_offset = align_offset(self.end_address, self.page_size);
-            self.add_free_block(Block {
-                addr: self.end_address,
-                size: align_offset,
-            });
-            self.end_address += align_offset;
-        }
-
-        let align_offset = align_offset(self.end_address, align);
-        if align_offset > 0 {
-            self.add_free_block(Block {
-                addr: self.end_address,
-                size: align_offset,
-            });
-            self.end_address += align_offset;
-        }
-
-        let addr = self.end_address;
-        self.end_address += size;
-
-        let block = Block { addr, size };
-
-        #[cfg(debug_assertions)]
-        self.allocated_blocks.insert(block);
-
-        block
-    }
-
-    /// Frees the space occupied by a block, allowing its range
-    /// to be reused.
+    /// Deallocates the given block.
     ///
-    /// Behavior is unspecified if `block` was not returned
-    /// from a previous call to `self.alloc()` or if it was
-    /// already deallocated.
-    pub fn dealloc(&mut self, block: Block) {
-        #[cfg(debug_assertions)]
-        assert!(
-            self.allocated_blocks.remove(&block),
-            "called dealloc() with a block that was not allocated (e.g., double-free)"
-        );
-
+    /// Behavior is unspecified if the block was not previously
+    /// allocated from `self`, or if it was already freed.
+    pub fn deallocate(&mut self, block: Block) {
         self.add_free_block(block);
     }
 
-    fn can_merge(&self, a: Block, b: Block) -> bool {
-        let adjacent = a.is_adjacent_to(b);
-        let same_page = a.addr / self.page_size == b.addr / self.page_size;
-        adjacent && same_page
-    }
-
     fn add_free_block(&mut self, mut block: Block) {
-        // Merge with adjacent free blocks.
-        let next_block = self
+        // Try to merge the block with adjacent blocks.
+        let page = &mut self.pages[block.page];
+        let previous = page
             .free_blocks_by_addr
-            .range(block.addr + 1..)
-            .map(|(_, b)| *b)
-            .next();
-        if let Some(next_block) = next_block {
-            if self.can_merge(block, next_block) {
-                self.remove_free_block(next_block);
-                block = block.merge_with(next_block);
+            .range(..block.start)
+            .last()
+            .map(|(_, &b)| b);
+        let next = page
+            .free_blocks_by_addr
+            .range(block.start + 1..)
+            .next()
+            .map(|(_, &b)| b);
+
+        for adjacent_id in [previous, next].into_iter().flatten() {
+            let adjacent = self.free_blocks[adjacent_id];
+            if block.can_merge(adjacent) {
+                block = block.merge(adjacent);
+                self.free_blocks.remove(adjacent_id);
+                assert!(
+                    self.free_blocks_by_size
+                        .get_mut(&adjacent.size)
+                        .unwrap()
+                        .remove(&adjacent_id),
+                    "not present in size index"
+                );
+                page.free_blocks_by_addr
+                    .remove(&adjacent.start)
+                    .expect("not present in addr index");
+
+                if let Some(stream) = adjacent.free_only_in_stream {
+                    assert!(
+                        self.streams[stream]
+                            .blocks_free_only_in_stream
+                            .remove(&adjacent_id),
+                        "not present in free_only_in_stream index"
+                    );
+                }
             }
         }
 
-        let prev_block = self
-            .free_blocks_by_addr
-            .range(..block.addr)
-            .rev()
-            .map(|(_, b)| *b)
-            .next();
-        if let Some(prev_block) = prev_block {
-            if self.can_merge(block, prev_block) {
-                self.remove_free_block(prev_block);
-                block = block.merge_with(prev_block);
-            }
-        }
-
+        let block_id = self.free_blocks.insert(block);
         self.free_blocks_by_size
             .entry(block.size)
             .or_default()
-            .push(block);
-        self.free_blocks_by_addr.insert(block.addr, block);
+            .insert(block_id);
+        page.free_blocks_by_addr.insert(block.start, block_id);
+
+        if let Some(stream) = block.free_only_in_stream {
+            self.streams
+                .get_mut(stream)
+                .expect("block deallocated after its stream ended")
+                .blocks_free_only_in_stream
+                .insert(block_id);
+        }
     }
 
-    fn remove_free_block(&mut self, block: Block) {
-        self.free_blocks_by_addr.remove(&block.addr);
-        let list = self.free_blocks_by_size.get_mut(&block.size).unwrap();
-        let pos = list
-            .iter()
-            .position(|b| b.addr == block.addr)
-            .expect("block not in free list");
-        list.swap_remove(pos);
+    fn remove_free_block(&mut self, block_id: BlockId) {
+        let block = self
+            .free_blocks
+            .remove(block_id)
+            .expect("block already removed");
+        self.pages[block.page]
+            .free_blocks_by_addr
+            .remove(&block.start)
+            .expect("block not in free_blocks_by_addr");
+        assert!(
+            self.free_blocks_by_size
+                .get_mut(&block.size)
+                .unwrap()
+                .remove(&block_id),
+            "block not in free_blocks_by_size"
+        );
+
+        if self.free_blocks_by_size[&block.size].is_empty() {
+            self.free_blocks_by_size.remove(&block.size);
+        }
+
+        if let Some(stream) = block.free_only_in_stream {
+            if let Some(stream) = self.streams.get_mut(stream) {
+                assert!(
+                    stream.blocks_free_only_in_stream.remove(&block_id),
+                    "block not in free_only_in_stream"
+                );
+            }
+        }
+    }
+
+    pub fn begin_stream(&mut self) -> StreamId {
+        self.streams.insert(Stream::default())
+    }
+
+    pub fn end_stream(&mut self, id: StreamId) {
+        let stream = self.streams.remove(id).expect("stream already ended");
+        for block in stream.blocks_free_only_in_stream {
+            let modified_block = Block {
+                free_only_in_stream: None,
+                ..self.free_blocks[block]
+            };
+            self.remove_free_block(block);
+            self.add_free_block(modified_block);
+        }
     }
 }
 
-fn align_offset(addr: u64, align: u64) -> u64 {
-    align - (addr % align)
+slotmap::new_key_type! {
+    pub struct PageId;
+}
+
+#[derive(Debug, Clone, Default)]
+struct Page {
+    /// Free blocks in this page, ordered by start
+    /// address. Used to accelerate block coalescing.
+    free_blocks_by_addr: BTreeMap<BlockAddr, BlockId>,
 }
 
 type BlockAddr = u64;
 type BlockSize = u64;
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+slotmap::new_key_type! {
+     struct BlockId;
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Block {
-    pub addr: BlockAddr,
+    pub page: PageId,
+    pub start: BlockAddr,
     pub size: BlockSize,
+    /// If the block was previously allocated within a stream,
+    /// then freed, and the stream is still alive,
+    /// this is the ID of that stream.
+    free_only_in_stream: Option<StreamId>,
 }
 
 impl Block {
-    pub fn is_adjacent_to(&self, other: Block) -> bool {
-        self.addr + self.size == other.addr || other.addr + other.size == self.addr
+    pub fn is_aligned_to(self, align: u64) -> bool {
+        self.start % align == 0
+    }
+
+    pub fn align_offset(self, align: u64) -> u64 {
+        if self.is_aligned_to(align) {
+            return 0;
+        }
+        align - (self.start % align)
+    }
+
+    pub fn end(self) -> BlockAddr {
+        self.start + self.size
+    }
+
+    pub fn can_merge(self, other: Self) -> bool {
+        self.page == other.page
+            && (self.start == other.end() || self.end() == other.start)
+            && self.free_only_in_stream == other.free_only_in_stream
+    }
+
+    pub fn merge(self, other: Self) -> Self {
+        debug_assert!(self.can_merge(other));
+        let start = self.start.min(other.start);
+        let end = self.end().max(other.end());
+        let size = end - start;
+        Self {
+            start,
+            size,
+            ..self
+        }
     }
 
     #[allow(unused)]
-    pub fn overlaps(mut self, mut other: Block) -> bool {
-        if other.addr < self.addr {
-            mem::swap(&mut self, &mut other);
-        }
-        other.addr >= self.addr && other.addr < self.addr + self.size
+    pub fn overlaps(self, other: Self) -> bool {
+        (self.start >= other.start && self.start < other.end())
+            || (other.start >= self.start && other.start < self.end())
     }
 
-    #[must_use]
-    pub fn merge_with(self, other: Block) -> Block {
-        debug_assert!(self.is_adjacent_to(other));
-        let addr = self.addr.min(other.addr);
-        let size = self.size + other.size;
-        Block { addr, size }
-    }
-
-    #[must_use]
-    pub fn split(self, offset: u64) -> (Block, Block) {
-        debug_assert!(offset > 0 && offset < self.size);
+    pub fn split(self, at: u64) -> (Self, Self) {
         (
-            Block {
-                addr: self.addr,
-                size: offset,
+            Self {
+                start: self.start,
+                size: at,
+                ..self
             },
-            Block {
-                addr: self.addr + offset,
-                size: self.size - offset,
+            Self {
+                start: self.start + at,
+                size: self.size - at,
+                ..self
             },
         )
     }
 }
 
+slotmap::new_key_type! {
+    pub struct StreamId;
+}
+
+#[derive(Debug, Clone, Default)]
+struct Stream {
+    /// List of blocks having `free_only_in_stream` set to this stream.
+    blocks_free_only_in_stream: BTreeSet<BlockId>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::{Rng, SeedableRng};
+    use rand_pcg::Pcg64Mcg;
 
     #[test]
-    fn test_new_allocator() {
-        let allocator = BlockAllocator::new(1024);
-        assert_eq!(allocator.end_address, 0);
+    fn simple() {
+        let mut allocator = BlockAllocator::new();
+        allocator.add_page(1024);
+
+        let block1 = allocator.allocate(128, 256).unwrap();
+        assert_eq!(block1.size, 128);
+
+        let block2 = allocator.allocate(1024 - 128, 128).unwrap();
+        assert_eq!(block2.size, 1024 - 128);
+
+        assert!(allocator.allocate(1, 1).is_none());
+
+        allocator.deallocate(block1);
+        allocator.deallocate(block2);
+
+        assert_eq!(allocator.allocate(1024, 8).unwrap().size, 1024);
     }
 
     #[test]
-    fn test_simple_alloc_and_dealloc() {
-        let mut allocator = BlockAllocator::new(1024);
-        let block = allocator.alloc(100, 8);
-        assert_eq!(block.size, 100);
-        assert_eq!(block.addr % 8, 0);
-        allocator.dealloc(block);
-    }
+    fn stress_test() {
+        let mut allocator = BlockAllocator::new();
+        allocator.add_page(64 * 1024 * 1024 * 1024);
 
-    #[test]
-    fn test_multiple_allocs() {
-        let mut allocator = BlockAllocator::new(1024);
-        let block1 = allocator.alloc(50, 8);
-        let block2 = allocator.alloc(100, 16);
-        let block3 = allocator.alloc(75, 32);
-
-        assert_eq!(block1.size, 50);
-        assert_eq!(block2.size, 100);
-        assert_eq!(block3.size, 75);
-
-        assert_eq!(block1.addr % 8, 0);
-        assert_eq!(block2.addr % 16, 0);
-        assert_eq!(block3.addr % 32, 0);
-
-        allocator.dealloc(block1);
-        allocator.dealloc(block2);
-        allocator.dealloc(block3);
-    }
-
-    #[test]
-    fn test_reuse_freed_block() {
-        let mut allocator = BlockAllocator::new(1024);
-        let block1 = allocator.alloc(100, 8);
-        allocator.dealloc(block1);
-        let block2 = allocator.alloc(50, 8);
-        assert_eq!(block1.addr, block2.addr);
-    }
-
-    #[test]
-    fn test_merge_adjacent_blocks() {
-        let mut allocator = BlockAllocator::new(1024);
-        let block1 = allocator.alloc(100, 8);
-        let block2 = allocator.alloc(100, 8);
-        let block3 = allocator.alloc(100, 8);
-
-        allocator.dealloc(block1);
-        allocator.dealloc(block3);
-        allocator.dealloc(block2);
-
-        let large_block = allocator.alloc(300, 8);
-        assert_eq!(large_block.size, 300);
-        assert_eq!(large_block.addr, block1.addr);
-    }
-
-    #[test]
-    fn test_alignment() {
-        let mut allocator = BlockAllocator::new(1024);
-        let _padding = allocator.alloc(1, 4);
-        let block = allocator.alloc(100, 64);
-        assert_eq!(block.addr % 64, 0);
+        let mut allocated_blocks: Vec<Block> = Vec::new();
+        let mut rng = Pcg64Mcg::seed_from_u64(66);
+        for _ in 0..25_000 {
+            if allocated_blocks.is_empty() || rng.gen_bool(0.4) {
+                let size = rng.gen_range(1024..1024 * 1024 * 32);
+                let block = allocator.allocate(size, 256).unwrap();
+                assert_eq!(block.size, size);
+                assert!(block.is_aligned_to(256));
+                assert!(!allocated_blocks.iter().any(|b2| block.overlaps(*b2)));
+                allocated_blocks.push(block);
+            } else {
+                let i = rng.gen_range(0..allocated_blocks.len());
+                let block = allocated_blocks.swap_remove(i);
+                allocator.deallocate(block);
+            }
+        }
     }
 }

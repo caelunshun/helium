@@ -54,7 +54,7 @@ impl CudnnGraph {
         } else {
             workspace_mem = cx
                 .allocator()
-                .alloc(workspace_size as u64, 256)
+                .allocate(workspace_size as u64, 256)
                 .expect("failed to allocate workspace");
             let ptr = workspace_mem.device_ptr() as *mut c_void;
             // Prevent deallocation of workspace memory until after this

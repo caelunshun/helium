@@ -17,12 +17,6 @@ pub trait Backend: Copy + Sized + Debug {
 
     fn make_instr_for_op(&self, op: &Op, graph: &Arc<OpGraph>, node_id: NodeId) -> Self::Instr;
     fn begin_execute(&self, device: Self::Device) -> Self::Executor;
-    fn allocate_tensor(
-        &self,
-        device: Self::Device,
-        data_type: DataType,
-        len: usize,
-    ) -> Self::TensorStorage;
     fn tensor_to_vec<E: DataTypeConversion>(&self, tensor: &Self::TensorStorage) -> Vec<E>;
 }
 
@@ -52,7 +46,7 @@ pub trait BackendExt: Backend {
             for instr in step.instrs() {
                 for output_node in instr.outputs() {
                     let descriptor = graph.get(output_node).descriptor();
-                    let tensor = self.allocate_tensor(
+                    let tensor = executor.allocate_tensor(
                         device,
                         descriptor.data_type,
                         descriptor.shape.num_elements(),
@@ -88,6 +82,12 @@ pub trait Executor<B: Backend> {
     /// A step is a list of instructions that may execute
     /// concurrently.
     fn begin_step(&mut self);
+    fn allocate_tensor(
+        &self,
+        device: B::Device,
+        data_type: DataType,
+        len: usize,
+    ) -> B::TensorStorage;
     fn execute_instr(&mut self, instr: &B::Instr, tensors: &mut TensorMap<B>);
     fn end_step(&mut self);
 }

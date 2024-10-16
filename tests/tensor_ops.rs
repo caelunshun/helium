@@ -360,3 +360,16 @@ fn swap_dims() {
         &[1.0, 2.0, 5.0, 6.0, 3.0, 4.0, 7.0, 8.0, 9.0, 10.0, 13.0, 14.0, 11.0, 12.0, 15.0, 16.0]
     );
 }
+
+#[test]
+#[cfg_attr(debug_assertions, ignore)]
+fn memory_reuse() {
+    for _ in 0..4 {
+        let x = Tensor::<1>::from_vec(
+            vec![1.0f32; 1024 * 1024 * 1024],
+            [1024 * 1024 * 1024],
+            DEVICE,
+        );
+        drop(x);
+    }
+}

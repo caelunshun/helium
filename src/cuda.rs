@@ -1,7 +1,7 @@
 use crate::{
     backend::{Backend, Executor, TensorMap},
     cuda::{
-        allocator::Memory,
+        allocator::{Memory, StreamId},
         context::{CudaContext, CudaStream},
         instr::{cudnn_graph::CudnnGraph, Instr},
         tensor_storage::TensorStorage,
@@ -72,18 +72,8 @@ impl Backend for Cuda {
             sync_events,
             instr_index: 0,
             hold_allocations: Vec::new(),
+            allocation_stream: cx.allocator().begin_stream(),
         }
-    }
-
-    fn allocate_tensor(
-        &self,
-        device: Self::Device,
-        data_type: DataType,
-        len: usize,
-    ) -> Self::TensorStorage {
-        let cx = CudaContext::global(device).unwrap();
-        TensorStorage::new(data_type, len, cx)
-            .unwrap_or_else(|e| panic!("failed to allocate tensor for {len}x {data_type:?}: {e}"))
     }
 
     fn tensor_to_vec<E: DataTypeConversion>(&self, tensor: &Self::TensorStorage) -> Vec<E> {
@@ -97,6 +87,7 @@ pub struct CudaExecutor {
     sync_events: Vec<CUevent>,
     hold_allocations: Vec<Memory>,
     instr_index: usize,
+    allocation_stream: StreamId,
 }
 
 impl Executor<Cuda> for CudaExecutor {
@@ -111,6 +102,17 @@ impl Executor<Cuda> for CudaExecutor {
         instr.execute(tensors, stream, self.cx, &mut self.hold_allocations);
 
         self.instr_index += 1;
+    }
+
+    fn allocate_tensor(
+        &self,
+        device: <Cuda as Backend>::Device,
+        data_type: DataType,
+        len: usize,
+    ) -> <Cuda as Backend>::TensorStorage {
+        let cx = CudaContext::global(device).unwrap();
+        TensorStorage::new(data_type, len, cx, self.allocation_stream)
+            .unwrap_or_else(|e| panic!("failed to allocate tensor for {len}x {data_type:?}: {e}"))
     }
 
     fn end_step(&mut self) {
