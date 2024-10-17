@@ -107,7 +107,7 @@ impl<const D: usize> AdTensor<D> {
         let result = self.tensor.sigmoid();
 
         let tape = self.tape.append_unary(move |flow: Tensor<D>| {
-            let exp = input.clone().exp();
+            let exp = (-input.clone()).exp();
             exp.clone() / (exp + 1.0).pow_scalar(2.0) * flow
         });
 
@@ -187,12 +187,14 @@ impl<const D: usize> AdTensor<D> {
                 flow = flow.swap_dims(a, b);
             }
 
-            let flow = flow.reduce_sum::<D>(broadcast_axes.len() as u32);
-            let mut temp_shape = flow.shape().to_vec();
+            let mut temp_shape = old_shape.to_vec();
             while temp_shape.len() < D2 {
                 temp_shape.push(1);
             }
-            let mut flow: Tensor<D2> = flow.reshape(temp_shape.try_into().unwrap());
+            let mut flow = flow.reduce_sum_and_reshape::<D2>(
+                broadcast_axes.len() as u32,
+                temp_shape.try_into().unwrap(),
+            );
 
             for (a, b) in apply_permutation_via_swaps(D2, &|x| inv_axis_mapping[&x]) {
                 flow = flow.swap_dims(a, b);

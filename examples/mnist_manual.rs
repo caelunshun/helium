@@ -4,42 +4,70 @@ use rand::prelude::*;
 use rand_pcg::Pcg64Mcg;
 
 struct Model {
-    layer1: Param<2>,
-    //bias1: Param<1>,
-    layer2: Param<2>,
-    //bias2: Param<1>,
-    layer3: Param<2>,
-    //bias3: Param<1>,
+    layers: [Layer; 3],
 }
 
 impl Model {
     pub fn with_random_weights(rng: &mut impl Rng, device: Device) -> Self {
         Self {
-            layer1: init_xavier(28 * 28, 256, rng, device).into(),
-            layer2: init_xavier(256, 128, rng, device).into(),
-            layer3: init_xavier(128, 10, rng, device).into(),
+            layers: [
+                Layer::with_random_weights(28 * 28, 256, rng, device),
+                Layer::with_random_weights(256, 128, rng, device),
+                Layer::with_random_weights(128, 10, rng, device),
+            ],
         }
     }
 
     pub fn forward(&self, mut x: AdTensor<2>) -> AdTensor<2> {
-        x = x.transpose();
-        for (i, layer) in [&self.layer1, &self.layer2, &self.layer3]
-            .into_iter()
-            .enumerate()
-        {
-            x = AdTensor::from(layer.clone()).matmul(x);
-            if i != 2 {
+        for (i, layer) in self.layers.iter().enumerate() {
+            x = layer.forward(x);
+            if i != self.layers.len() - 1 {
                 x = x.sigmoid();
             }
         }
-        x.transpose()
+        x
     }
 
     pub fn update_weights(&mut self, mut grads: Gradients, learning_rate: f32) {
-        for layer in [&mut self.layer1, &mut self.layer2, &mut self.layer3] {
-            let grad = grads.remove::<2>(layer.id());
-            layer.set_value(layer.value().clone() - grad * learning_rate);
+        for layer in &mut self.layers {
+            layer.update_weights(&mut grads, learning_rate);
         }
+    }
+}
+
+struct Layer {
+    weights: Param<2>,
+    bias: Param<1>,
+}
+
+impl Layer {
+    pub fn with_random_weights(
+        inputs: usize,
+        outputs: usize,
+        rng: &mut impl Rng,
+        device: Device,
+    ) -> Self {
+        Self {
+            weights: init_xavier(inputs, outputs, rng, device).into(),
+            bias: init_zeros(outputs, device).into(),
+        }
+    }
+
+    pub fn forward(&self, x: AdTensor<2>) -> AdTensor<2> {
+        let [batch_size, _] = x.shape();
+        let [output_size] = self.bias.value().shape();
+        x.matmul(self.weights.clone().into())
+            + AdTensor::from(self.bias.clone()).broadcast_to([batch_size, output_size])
+    }
+
+    pub fn update_weights(&mut self, grads: &mut Gradients, learning_rate: f32) {
+        let weight_grad = grads.remove::<2>(self.weights.id());
+        let bias_grad = grads.remove::<1>(self.bias.id());
+
+        self.weights
+            .set_value(self.weights.value().clone() - weight_grad * learning_rate);
+        self.bias
+            .set_value(self.bias.value().clone() - bias_grad * learning_rate);
     }
 }
 
@@ -62,7 +90,7 @@ fn init_xavier(inputs: usize, outputs: usize, rng: &mut impl Rng, device: Device
     let weights = (0..inputs * outputs)
         .map(|_| rng.gen_range(-x..=x))
         .collect::<Vec<_>>();
-    Tensor::from_vec(weights, [outputs, inputs], device)
+    Tensor::from_vec(weights, [inputs, outputs], device)
 }
 
 #[derive(Debug, Clone)]
@@ -102,7 +130,7 @@ fn main() {
     let lr = 1e-2;
     let batch_size = 32;
 
-    for epoch in 0..num_epochs {
+    for _epoch in 0..num_epochs {
         items.shuffle(&mut rng);
 
         for batch in items.chunks_exact(batch_size) {

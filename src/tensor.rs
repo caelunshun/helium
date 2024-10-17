@@ -311,6 +311,30 @@ impl<const D: usize> Tensor<D> {
         self.op_reduce(ReduceOp::Sum, depth)
     }
 
+    pub(crate) fn reduce_sum_and_reshape<const D2: usize>(
+        self,
+        depth: u32,
+        new_shape: [usize; D2],
+    ) -> Tensor<D2> {
+        let (cx, this) = self.make_graph();
+        let reduced = Self::from_op(
+            &cx,
+            Op::Reduce(op::Reduce {
+                depth,
+                input: this,
+                op: ReduceOp::Sum,
+            }),
+        );
+        let (cx, this) = reduced.make_graph();
+        Tensor::from_op(
+            &cx,
+            Op::Reshape(op::Reshape {
+                new_shape: Shape::new(new_shape),
+                input: this,
+            }),
+        )
+    }
+
     /// Performs mean reduction along the last `depth` dimensions
     /// of the tensor. The last `depth` dimensions are replaced
     /// with a single dimension of length 1.
