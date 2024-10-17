@@ -1,5 +1,5 @@
-use crate::Tensor;
-use std::ops::{Add, Mul, Sub};
+use crate::{DataType, Tensor};
+use std::ops::{Add, Div, Mul, Sub};
 
 mod gradients;
 mod param;
@@ -33,6 +33,21 @@ impl<const D: usize> AdTensor<D> {
 
     pub fn into_value(self) -> Tensor<D> {
         self.tensor
+    }
+
+    pub fn data_type(&self) -> DataType {
+        self.tensor.data_type()
+    }
+
+    pub fn recip(self) -> Self {
+        let input = self.tensor.clone();
+        let tape = self
+            .tape
+            .append_unary(move |flow: Tensor<D>| flow * -(input.clone().pow_scalar(-2.0)));
+        Self {
+            tape,
+            tensor: self.tensor.recip(),
+        }
     }
 
     pub fn pow_scalar(self, power: f32) -> Self {
@@ -110,13 +125,21 @@ impl<const D: usize> AdTensor<D> {
 
         let tape = self.tape.append_binary(
             rhs.tape,
-            move |flow: Tensor<D>| b.clone().matmul(flow.transpose()),
+            move |flow: Tensor<D>| b.clone().matmul(flow.transpose()).transpose(),
             move |flow: Tensor<D>| a.clone().transpose().matmul(flow),
         );
 
         Self {
             tape,
             tensor: result,
+        }
+    }
+
+    pub fn transpose(self) -> Self {
+        let tape = self.tape.append_unary(|flow: Tensor<D>| flow.transpose());
+        Self {
+            tape,
+            tensor: self.tensor.transpose(),
         }
     }
 
@@ -334,6 +357,22 @@ impl<const D: usize> Mul<f32> for AdTensor<D> {
         let tensor = self.tensor * rhs;
         let tape = self.tape.append_unary(move |flow: Tensor<D>| flow * rhs);
         Self { tensor, tape }
+    }
+}
+
+impl<const D: usize> Div for AdTensor<D> {
+    type Output = Self;
+
+    fn div(self, rhs: Self) -> Self::Output {
+        self * rhs.recip()
+    }
+}
+
+impl<const D: usize> Div<f32> for AdTensor<D> {
+    type Output = Self;
+
+    fn div(self, rhs: f32) -> Self::Output {
+        self * rhs.recip()
     }
 }
 

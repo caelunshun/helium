@@ -295,7 +295,9 @@ fn matmul_batched() {
     )
     .transpose();
 
-    let result = a.matmul(b).transpose().into_vec::<f32>();
+    let result = a.matmul(b).transpose();
+    assert_eq!(result.shape(), [2, 3, 3]);
+    let result = result.into_vec::<f32>();
 
     let expected = vec![
         9.0, 12.0, 15.0, 19.0, 26.0, 33.0, 29.0, 40.0, 51.0, // first batch

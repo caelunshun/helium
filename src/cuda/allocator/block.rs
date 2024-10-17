@@ -142,11 +142,11 @@ impl BlockAllocator {
         page.free_blocks_by_addr.insert(block.start, block_id);
 
         if let Some(stream) = block.free_only_in_stream {
-            self.streams
-                .get_mut(stream)
-                .expect("block deallocated after its stream ended")
-                .blocks_free_only_in_stream
-                .insert(block_id);
+            if let Some(stream) = self.streams.get_mut(stream) {
+                stream.blocks_free_only_in_stream.insert(block_id);
+            } else {
+                self.free_blocks[block_id].free_only_in_stream = None;
+            }
         }
     }
 

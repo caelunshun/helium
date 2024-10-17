@@ -41,7 +41,7 @@ insta = "1"
 approx = "0.5"
 rand = "0.8"
 faer = "0.19"
-mnist = "0.6"
+mnist = { version = "0.6", features = ["download"] }
 
 [features]
 default = ["cpu", "cuda"]
@@ -50,3 +50,6 @@ cpu = ["dep:gemm", "dep:sleef", "dep:rayon"]
 
 [profile.dev]
 opt-level = 1
+
+[profile.release]
+debug = true

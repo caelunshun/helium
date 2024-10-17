@@ -17,9 +17,15 @@ use crate::{
     shape::Shape,
     DataType,
 };
-use ahash::AHashSet;
+use ahash::{AHashMap, AHashSet};
+use parking_lot::Mutex;
 use slotmap::SecondaryMap;
-use std::{ffi::c_void, ptr, sync::Arc};
+use std::{
+    collections::hash_map::Entry,
+    ffi::c_void,
+    ptr,
+    sync::{Arc, OnceLock},
+};
 
 #[derive(Debug, Clone)]
 pub struct CudnnGraph {
@@ -41,9 +47,24 @@ impl CudnnGraph {
         hold_allocations: &mut Vec<Memory>,
     ) {
         let cudnn = cx.cudnn_handle();
-        let (graph, tensor_desc_map) = self.build(cudnn);
 
-        let engine = Engine::choose_with_heuristic(&graph).expect("failed to get engine");
+        static ENGINE_CACHE: OnceLock<
+            Mutex<AHashMap<OpSubgraph, (Arc<Engine>, Arc<SecondaryMap<NodeId, TensorDescriptor>>)>>,
+        > = OnceLock::new();
+        let (engine, tensor_desc_map) = match ENGINE_CACHE
+            .get_or_init(Default::default)
+            .lock()
+            .entry(self.subgraph.clone())
+        {
+            Entry::Occupied(entry) => entry.get().clone(),
+            Entry::Vacant(entry) => {
+                let (graph, tensor_desc_map) = self.build(cudnn);
+                let engine =
+                    Arc::new(Engine::choose_with_heuristic(&graph).expect("failed to get engine"));
+                entry.insert((engine, Arc::new(tensor_desc_map))).clone()
+            }
+        };
+
         let workspace_size = engine
             .workspace_size()
             .expect("failed to get workspace size");
@@ -97,9 +118,8 @@ impl CudnnGraph {
 
         while let Some(node_id) = stack.pop() {
             visited.insert(node_id);
-            let Node::Intermediate(node) = self.subgraph.graph().get(node_id) else {
-                unreachable!("cuDNN subgraph cannot contain input or output nodes")
-            };
+
+            let node = self.subgraph.graph().get(node_id);
 
             let is_virtual = !(self.subgraph.leafs().any(|l| l == node_id)
                 || self.subgraph.inputs().any(|i| i == node_id));
@@ -110,14 +130,17 @@ impl CudnnGraph {
                 } else {
                     TensorKind::Concrete
                 },
-                node.descriptor.data_type,
-                &mode.augment_tensor_shape(&node.descriptor.shape),
+                node.descriptor().data_type,
+                &mode.augment_tensor_shape(&node.descriptor().shape),
             )
             .expect("failed to create tensor descriptor");
 
             tensor_descriptors.insert(node_id, tensor_desc);
 
             if !self.subgraph.inputs().any(|i| i == node_id) {
+                let Node::Intermediate(node) = self.subgraph.graph().get(node_id) else {
+                    unreachable!("cuDNN subgraph cannot contain input or output nodes")
+                };
                 Self::build_op(&node.op, node_id, &tensor_descriptors, &mut builder);
             }
 

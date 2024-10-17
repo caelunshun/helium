@@ -88,7 +88,7 @@ impl Op {
                 shape.swap(op.axis_a, op.axis_b);
                 Descriptor {
                     shape: Shape::new(shape),
-                    data_type: DataType::F16,
+                    ..input
                 }
             }
         }

@@ -147,5 +147,7 @@ impl Drop for CudaExecutor {
                     .expect("failed to synchronize stream");
             }
         }
+        self.hold_allocations.clear();
+        self.cx.allocator().end_stream(self.allocation_stream);
     }
 }
