@@ -232,7 +232,7 @@ impl<const D: usize> AdTensor<D> {
             .iter()
             .copied()
             .product::<usize>();
-        let result: Tensor<D2> = self.tensor.reduce_sum(depth);
+        let result: Tensor<D2> = self.tensor.reduce_mean(depth);
         let result_shape = result.shape();
 
         let tape = self.tape.append_unary(move |flow: Tensor<D2>| {

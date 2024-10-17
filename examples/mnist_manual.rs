@@ -77,8 +77,9 @@ fn softmax(x: AdTensor<2>) -> AdTensor<2> {
     x / denom
 }
 
+#[expect(unused)]
 fn cross_entropy_loss(logits: AdTensor<2>, targets: AdTensor<2>) -> AdTensor<1> {
-    (softmax(logits).log() * targets).reduce_mean::<1>(2) * -1.0
+    ((softmax(logits) + 1e-6).log() * targets).reduce_mean::<1>(2) * -1.0
 }
 
 fn init_zeros(len: usize, device: Device) -> Tensor<1> {
@@ -107,7 +108,7 @@ fn main() {
     let mnist = MnistBuilder::new()
         .label_format_one_hot()
         .training_set_length(60_000)
-        .validation_set_length(0)
+        .validation_set_length(10_000)
         .test_set_length(0)
         .download_and_extract()
         .finalize();
@@ -125,10 +126,23 @@ fn main() {
             label_one_hot: label.iter().copied().map(|x| x as f32).collect(),
         })
         .collect();
+    let validation_items: Vec<Item> = mnist
+        .val_img
+        .chunks_exact(28 * 28)
+        .zip(mnist.val_lbl.chunks_exact(10))
+        .map(|(img, label)| Item {
+            image: img
+                .iter()
+                .copied()
+                .map(|x| x as f32 / u8::MAX as f32)
+                .collect(),
+            label_one_hot: label.iter().copied().map(|x| x as f32).collect(),
+        })
+        .collect();
 
-    let num_epochs = 5;
+    let num_epochs = 10;
     let lr = 1e-2;
-    let batch_size = 32;
+    let batch_size = 1024;
 
     for _epoch in 0..num_epochs {
         items.shuffle(&mut rng);
@@ -147,14 +161,32 @@ fn main() {
             let input = AdTensor::new(Tensor::<2>::from_vec(input, [batch_size, 28 * 28], device));
             let labels = AdTensor::new(Tensor::<2>::from_vec(labels, [batch_size, 10], device));
 
-            let logits = model.forward(input);
-            let loss = cross_entropy_loss(logits, labels);
+            let logits = model.forward(input).sigmoid();
+            let loss = (logits - labels).pow_scalar(2.0).reduce_mean::<1>(2);
 
             let grads = loss.clone().backward();
             model.update_weights(grads, lr);
 
             let loss_scalar = loss.into_value().into_scalar::<f32>();
-            dbg!(loss_scalar);
+            println!("Training batch loss: {loss_scalar:.3}");
         }
     }
+
+    // Validation
+    let inputs: Vec<f32> = validation_items
+        .iter()
+        .flat_map(|item| item.image.as_slice())
+        .copied()
+        .collect();
+    let labels: Vec<f32> = validation_items
+        .iter()
+        .flat_map(|item| item.label_one_hot.as_slice())
+        .copied()
+        .collect();
+    let inputs = Tensor::from_vec(inputs, [validation_items.len(), 28 * 28], device);
+    let labels = Tensor::from_vec(labels, [validation_items.len(), 10], device);
+
+    let outputs = model.forward(inputs.into()).sigmoid().into_value();
+    let loss = (outputs - labels).pow_scalar(2.0).reduce_mean::<1>(2);
+    println!("Validation loss: {:.3}", loss.into_scalar::<f32>());
 }
