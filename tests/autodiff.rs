@@ -53,6 +53,19 @@ fn reduce_sum_mean() {
 }
 
 #[test]
+fn broadcast() {
+    let param = Param::new(Tensor::<2>::from_vec(vec![1.0f32; 20], [20, 1], DEVICE));
+
+    let x = AdTensor::new(Tensor::<3>::from_vec(vec![2.0f32; 80], [2, 20, 2], DEVICE));
+
+    let y = (AdTensor::from(param.clone()).broadcast_to(x.shape()) * x).reduce_sum::<1>(3);
+
+    let grads = y.backward();
+    let grad = grads.get::<2>(param.id());
+    assert_ulps_eq!(grad.clone().into_vec::<f32>().as_slice(), &[8.0f32; 20][..]);
+}
+
+#[test]
 fn basic_gradient_descent() {
     // Use gradient descent to converge a parameter onto sqrt(X)
     const X: f32 = 1001.0;

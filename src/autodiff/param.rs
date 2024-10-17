@@ -35,6 +35,12 @@ impl<const D: usize> Param<D> {
     }
 }
 
+impl<const D: usize> From<Tensor<D>> for Param<D> {
+    fn from(value: Tensor<D>) -> Self {
+        Self::new(value)
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ParamId(u64);
 
