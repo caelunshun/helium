@@ -184,9 +184,27 @@ fn main() {
         .copied()
         .collect();
     let inputs = Tensor::from_vec(inputs, [validation_items.len(), 28 * 28], device);
-    let labels = Tensor::from_vec(labels, [validation_items.len(), 10], device);
 
-    let outputs = model.forward(inputs.into()).sigmoid().into_value();
-    let loss = (outputs - labels).pow_scalar(2.0).reduce_mean::<1>(2);
-    println!("Validation loss: {:.3}", loss.into_scalar::<f32>());
+    let outputs = model
+        .forward(inputs.into())
+        .sigmoid()
+        .into_value()
+        .into_vec::<f32>();
+
+    let mut num_correct = 0;
+    for (item, output) in validation_items.iter().zip(outputs.chunks_exact(10)) {
+        let output = output
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.total_cmp(b))
+            .unwrap()
+            .0;
+        let expected = item.label_one_hot.iter().position(|&x| x == 1.0).unwrap();
+        if output == expected {
+            num_correct += 1;
+        }
+    }
+
+    let accuracy = num_correct as f64 / validation_items.len() as f64 * 100.0;
+    println!("Validation accuracy: {accuracy:.2}%");
 }

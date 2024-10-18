@@ -147,6 +147,11 @@ impl Drop for CudaExecutor {
                     .expect("failed to synchronize stream");
             }
         }
+        for event in self.sync_events.drain(..) {
+            unsafe {
+                driver::result::event::destroy(event).expect("failed to destroy event");
+            }
+        }
         self.hold_allocations.clear();
         self.cx.allocator().end_stream(self.allocation_stream);
     }
