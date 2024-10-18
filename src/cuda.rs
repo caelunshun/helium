@@ -6,7 +6,7 @@ use crate::{
         instr::{cudnn_graph::CudnnGraph, Instr},
         tensor_storage::TensorStorage,
     },
-    data_type::{DataType, DataTypeConversion},
+    data_type::DataType,
     opgraph::{op::Op, subgraph::OpSubgraph, NodeId, OpGraph},
 };
 use cudarc::{
@@ -45,7 +45,9 @@ impl Backend for Cuda {
             | Op::ChangeDataType(_)
             | Op::Reduce(_)
             | Op::Broadcast(_)
-            | Op::Reshape(_) => {
+            | Op::Reshape(_)
+            | Op::Compare(_)
+            | Op::Select(_) => {
                 let subgraph = OpSubgraph::from_nodes(graph, vec![node_id]);
                 Instr::PointwiseGraph(PointwiseGraph::new(subgraph))
             }
@@ -74,10 +76,6 @@ impl Backend for Cuda {
             hold_allocations: Vec::new(),
             allocation_stream: cx.allocator().begin_stream(),
         }
-    }
-
-    fn tensor_to_vec<E: DataTypeConversion>(&self, tensor: &Self::TensorStorage) -> Vec<E> {
-        tensor.to_vec()
     }
 }
 

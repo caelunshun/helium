@@ -44,6 +44,7 @@ impl Default for KernelBuilder {
             ],
             items: vec![indoc! {"
                     typedef unsigned int uint32_t;
+                    typedef unsigned char uint8_t;
         
                     struct alignas(8) __nv_bfloat164 {
                         __nv_bfloat16 x;
@@ -194,26 +195,9 @@ impl KernelBuilder {
             DataType::F16 => "__half",
             DataType::Bf16 => "__nv_bfloat16",
             DataType::F32 => "float",
-        }
-    }
-
-    #[expect(unused)]
-    pub fn cpp_vector4_type(data_type: DataType) -> &'static str {
-        match data_type {
-            DataType::F16 => "half4",
-            DataType::Bf16 => "__nv_bfloat164",
-            DataType::F32 => "float4",
-        }
-    }
-
-    #[expect(unused)]
-    pub fn vector_component(index: usize) -> &'static str {
-        match index {
-            0 => "x",
-            1 => "y",
-            2 => "z",
-            3 => "w",
-            _ => panic!("vector component {index} out of bounds"),
+            DataType::U32 => "uint32_t",
+            // Note: bitset packed
+            DataType::Bool => "uint8_t",
         }
     }
 }

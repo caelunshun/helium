@@ -1,5 +1,5 @@
 use crate::{
-    data_type::{DataType, DataTypeConversion},
+    data_type::DataType,
     opgraph::{op::Op, NodeId, OpGraph},
     shape::Shape,
 };
@@ -17,7 +17,6 @@ pub trait Backend: Copy + Sized + Debug {
 
     fn make_instr_for_op(&self, op: &Op, graph: &Arc<OpGraph>, node_id: NodeId) -> Self::Instr;
     fn begin_execute(&self, device: Self::Device) -> Self::Executor;
-    fn tensor_to_vec<E: DataTypeConversion>(&self, tensor: &Self::TensorStorage) -> Vec<E>;
 }
 
 pub trait BackendExt: Backend {

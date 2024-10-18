@@ -17,6 +17,8 @@ pub enum Op {
     Broadcast(Broadcast),
     Reshape(Reshape),
     SwapDims(SwapDims),
+    Compare(Compare),
+    Select(Select),
 }
 
 impl Op {
@@ -31,6 +33,8 @@ impl Op {
             Op::Broadcast(op) => vec![op.input],
             Op::Reshape(op) => vec![op.input],
             Op::SwapDims(op) => vec![op.input],
+            Op::Compare(op) => vec![op.lhs, op.rhs],
+            Op::Select(op) => vec![op.lhs, op.rhs, op.selector],
         }
     }
 
@@ -91,6 +95,18 @@ impl Op {
                     ..input
                 }
             }
+            Op::Compare(op) => {
+                // Assume lhs and rhs have same shape (validated at high-level API)
+                let input = get_input_descriptor(op.lhs);
+                Descriptor {
+                    data_type: DataType::Bool,
+                    ..input
+                }
+            }
+            Op::Select(op) => {
+                // Assume lhs and rhs have same data type and shape (validated at high-level API0
+                get_input_descriptor(op.lhs)
+            }
         }
     }
 
@@ -105,17 +121,9 @@ impl Op {
             Op::ChangeDataType(_) => OpKind::ChangeDataType,
             Op::Broadcast(_) => OpKind::Broadcast,
             Op::Reshape(_) => OpKind::Reshape,
+            Op::Compare(_) => OpKind::Compare,
+            Op::Select(_) => OpKind::Select,
         }
-    }
-
-    pub fn is_pointwise(&self) -> bool {
-        matches!(
-            self.kind(),
-            OpKind::UnaryPointwise
-                | OpKind::BinaryPointwise
-                | OpKind::ChangeDataType
-                | OpKind::Reshape
-        )
     }
 
     pub fn apply_node_mapping(&mut self, mapping: &SecondaryMap<NodeId, NodeId>) {
@@ -147,6 +155,15 @@ impl Op {
             Op::Reshape(op) => {
                 op.input = mapping[op.input];
             }
+            Op::Compare(op) => {
+                op.lhs = mapping[op.lhs];
+                op.rhs = mapping[op.rhs];
+            }
+            Op::Select(op) => {
+                op.lhs = mapping[op.lhs];
+                op.rhs = mapping[op.rhs];
+                op.selector = mapping[op.selector];
+            }
         }
     }
 }
@@ -162,6 +179,8 @@ pub enum OpKind {
     ChangeDataType,
     Broadcast,
     Reshape,
+    Compare,
+    Select,
 }
 
 /// Batched multiplication of column-major matrices stored in the last
@@ -323,4 +342,29 @@ pub struct SwapDims {
     pub input: NodeId,
     pub axis_a: usize,
     pub axis_b: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Compare {
+    pub lhs: NodeId,
+    pub rhs: NodeId,
+    pub op: CompareOp,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub enum CompareOp {
+    Equal,
+    NotEqual,
+    LessThan,
+    LessThanOrEqual,
+    GreaterThan,
+    GreaterThanOrEqual,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Select {
+    pub lhs: NodeId,
+    pub rhs: NodeId,
+    /// Boolean tensor. Selects `lhs` for `false` and `rhs` for `true`.
+    pub selector: NodeId,
 }

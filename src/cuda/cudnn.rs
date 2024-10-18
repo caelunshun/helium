@@ -727,6 +727,8 @@ fn convert_data_type(dtype: DataType) -> cudnnDataType_t {
         DataType::F16 => cudnnDataType_t::CUDNN_DATA_HALF,
         DataType::Bf16 => cudnnDataType_t::CUDNN_DATA_BFLOAT16,
         DataType::F32 => cudnnDataType_t::CUDNN_DATA_FLOAT,
+        DataType::U32 => cudnnDataType_t::CUDNN_DATA_INT32,
+        DataType::Bool => cudnnDataType_t::CUDNN_DATA_BOOLEAN,
     }
 }
 

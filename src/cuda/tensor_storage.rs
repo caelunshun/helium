@@ -4,7 +4,7 @@ use crate::{
         context::{CudaContext, CudaStream},
         error::CudaError,
     },
-    data_type::{DataType, DataTypeConversion, DataVec},
+    data_type::{DataClassTrait, DataType, DataVec},
 };
 use cudarc::{driver, driver::sys::CUdeviceptr};
 use half::{bf16, f16};
@@ -14,6 +14,7 @@ use std::{mem, sync::Arc};
 pub struct TensorStorage {
     memory: Arc<Memory>,
     data_type: DataType,
+    num_elements: usize,
 }
 
 impl TensorStorage {
@@ -24,14 +25,14 @@ impl TensorStorage {
         allocation_stream: StreamId,
     ) -> Result<Self, CudaError> {
         const ALIGN: u64 = 64;
-        let memory = cx.allocator().allocate_in_stream(
-            len as u64 * data_type.size() as u64,
-            ALIGN,
-            allocation_stream,
-        )?;
+        let num_bytes = (len * data_type.size_in_bits() + 7) / 8;
+        let memory =
+            cx.allocator()
+                .allocate_in_stream(num_bytes as u64, ALIGN, allocation_stream)?;
         Ok(Self {
             memory: Arc::new(memory),
             data_type,
+            num_elements: len,
         })
     }
 
@@ -70,7 +71,7 @@ impl TensorStorage {
                     )
                     .result()?;
             },
-            DataType::F32 => unsafe {
+            DataType::F32 | DataType::U32 => unsafe {
                 driver::sys::lib()
                     .cuMemsetD32Async(
                         self.device_ptr(),
@@ -80,6 +81,20 @@ impl TensorStorage {
                     )
                     .result()?;
             },
+            DataType::Bool => {
+                let b = value != 0.0;
+                let mask = if b { 0xFF } else { 0 };
+                unsafe {
+                    driver::sys::lib()
+                        .cuMemsetD8Async(
+                            self.device_ptr(),
+                            mask,
+                            self.memory.len() as usize,
+                            stream.raw(),
+                        )
+                        .result()?;
+                }
+            }
         }
         Ok(())
     }
@@ -90,32 +105,5 @@ impl TensorStorage {
 
     pub fn data_type(&self) -> DataType {
         self.data_type
-    }
-
-    pub fn to_vec<T: DataTypeConversion>(&self) -> Vec<T> {
-        let mut bytes = vec![0u8; self.memory.len() as usize];
-        unsafe {
-            driver::result::memcpy_dtoh_sync(&mut bytes, self.device_ptr())
-                .expect("failed to memcpy from device to host");
-        }
-        match self.data_type {
-            DataType::F16 => bytemuck::cast_slice::<u8, f16>(&bytes)
-                .iter()
-                .copied()
-                .map(f16::to_f32)
-                .map(T::from_f32)
-                .collect(),
-            DataType::Bf16 => bytemuck::cast_slice::<u8, bf16>(&bytes)
-                .iter()
-                .copied()
-                .map(bf16::to_f32)
-                .map(T::from_f32)
-                .collect(),
-            DataType::F32 => bytemuck::cast_slice::<u8, f32>(&bytes)
-                .iter()
-                .copied()
-                .map(T::from_f32)
-                .collect(),
-        }
     }
 }
