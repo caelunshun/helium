@@ -195,13 +195,13 @@ impl BlockAllocator {
 
     pub fn begin_stream(&mut self, parent: Option<StreamId>) -> StreamId {
         let ancestors = match parent {
-            Some(p) => self.streams[p]
+            Some(p) if self.streams.contains_key(p) => self.streams[p]
                 .ancestors
                 .iter()
                 .copied()
                 .chain([p])
                 .collect(),
-            None => BTreeSet::new(),
+            _ => BTreeSet::new(),
         };
 
         self.streams.insert(Stream {

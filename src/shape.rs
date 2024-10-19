@@ -49,3 +49,15 @@ impl Index<usize> for Shape {
         &self.0[index]
     }
 }
+
+impl From<Vec<usize>> for Shape {
+    fn from(value: Vec<usize>) -> Self {
+        Self::new(value)
+    }
+}
+
+impl<const N: usize> From<[usize; N]> for Shape {
+    fn from(value: [usize; N]) -> Self {
+        Self::new(value)
+    }
+}

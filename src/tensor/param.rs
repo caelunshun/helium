@@ -1,4 +1,4 @@
-use crate::Tensor;
+use crate::{tensor::tape::Tape, Tensor};
 use std::sync::atomic::AtomicU64;
 
 /// A model parameter tensor.
@@ -11,11 +11,10 @@ pub struct Param<const D: usize> {
 }
 
 impl<const D: usize> Param<D> {
-    pub fn new(value: Tensor<D>) -> Self {
-        Self {
-            value,
-            id: ParamId::new(),
-        }
+    pub fn new(mut value: Tensor<D>) -> Self {
+        let id = ParamId::new();
+        value.tape = Some(Tape::new_param(id, value.raw.clone()));
+        Self { value, id }
     }
 
     pub fn id(&self) -> ParamId {
@@ -30,7 +29,8 @@ impl<const D: usize> Param<D> {
         self.value
     }
 
-    pub fn set_value(&mut self, value: Tensor<D>) {
+    pub fn set_value(&mut self, mut value: Tensor<D>) {
+        value.tape = Some(Tape::new_param(self.id, value.raw.clone()));
         self.value = value;
     }
 }

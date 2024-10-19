@@ -24,7 +24,11 @@ pub trait Backend: Copy + Sized + Debug {
         callback: impl FnOnce(DataVec) + Send + Sync + 'static,
         device: Self::Device,
     );
-    fn begin_execute(&self, device: Self::Device) -> Self::Executor;
+    fn begin_execute(
+        &self,
+        input_tensors: &TensorMap<Self>,
+        device: Self::Device,
+    ) -> Self::Executor;
 }
 
 pub trait BackendExt: Backend {
@@ -40,7 +44,7 @@ pub trait BackendExt: Backend {
 
         let mut tensors = TensorMap::new(&graph, inputs);
 
-        let mut executor = self.begin_execute(device);
+        let mut executor = self.begin_execute(&tensors, device);
         for step in plan.steps() {
             for released_tensor in step.tensors_to_release() {
                 tensors.free(*released_tensor);
@@ -130,6 +134,10 @@ impl<'a, B: Backend> TensorMap<'a, B> {
     #[expect(unused)]
     pub fn tensor_shape(&self, node: NodeId) -> &Shape {
         &self.op_graph.get(node).descriptor().shape
+    }
+
+    pub fn storages(&self) -> impl Iterator<Item = (NodeId, &B::TensorStorage)> + '_ {
+        self.storages.iter()
     }
 
     fn free(&mut self, node: NodeId) {

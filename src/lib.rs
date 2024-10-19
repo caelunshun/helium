@@ -11,13 +11,18 @@ pub mod device;
 //pub mod dyn_tensor;
 pub mod error;
 pub mod opgraph;
-//pub mod raw_tensor;
+mod raw_tensor;
 mod shape;
+mod tensor;
 
 #[doc(inline)]
 pub use self::{
     //autodiff::{AdTensor, Gradients, Param},
     data_type::DataType,
     device::Device,
-    //tensor::Tensor,
+    tensor::{
+        gradients::Gradients,
+        param::{Param, ParamId},
+        Tensor,
+    },
 };

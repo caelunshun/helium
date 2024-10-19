@@ -38,21 +38,38 @@ pub enum DataClass {
 
 pub trait DataClassTrait {
     type HighP: Copy;
+
+    fn data_class() -> DataClass;
 }
 
+#[derive(Copy, Clone, Debug)]
 pub struct Float;
 impl DataClassTrait for Float {
     type HighP = f64;
+
+    fn data_class() -> DataClass {
+        DataClass::Float
+    }
 }
 
+#[derive(Copy, Clone, Debug)]
 pub struct Int;
 impl DataClassTrait for Int {
     type HighP = i64;
+
+    fn data_class() -> DataClass {
+        DataClass::Int
+    }
 }
 
+#[derive(Copy, Clone, Debug)]
 pub struct Bool;
 impl DataClassTrait for Bool {
     type HighP = bool;
+
+    fn data_class() -> DataClass {
+        DataClass::Bool
+    }
 }
 
 pub trait DataTypeConversion<C: DataClassTrait>: Copy + Sized {

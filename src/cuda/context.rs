@@ -190,9 +190,7 @@ unsafe impl Sync for CudaEvent {}
 impl CudaEvent {
     pub fn new() -> Result<Self, CudaError> {
         Ok(Self {
-            raw: unsafe {
-                driver::result::event::create(CUevent_flags_enum::CU_EVENT_BLOCKING_SYNC)?
-            },
+            raw: driver::result::event::create(CUevent_flags_enum::CU_EVENT_BLOCKING_SYNC)?,
         })
     }
 

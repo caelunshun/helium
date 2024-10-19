@@ -46,8 +46,12 @@ impl TensorStorage {
     ) -> Result<Self, CudaError> {
         const ALIGN: u64 = 64;
 
-        // Align the size to a multiple of 32 bits
-        let num_bytes = (len * data_type.size_in_bits() + 31) / 32 * 4;
+        let num_bytes = if data_type == DataType::Bool {
+            // Align the size to a multiple of 32 bits
+            (len * data_type.size_in_bits() + 31) / 32 * 4
+        } else {
+            len * data_type.size_in_bits() / 8
+        };
 
         let memory = match allocation_stream {
             Some(allocation_stream) => {
@@ -184,5 +188,9 @@ impl TensorStorage {
 
     pub fn data_type(&self) -> DataType {
         self.data_type
+    }
+
+    pub fn mark_in_use_by_stream(&self, stream: StreamId) {
+        self.memory.mark_in_use_by_stream(stream);
     }
 }

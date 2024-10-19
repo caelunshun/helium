@@ -102,14 +102,31 @@ impl Backend for Cuda {
             .record(cx.dtoh_stream())
             .expect("failed to record event");
 
+        // Keep tensor alive until download completes
+        let tensor_clone = tensor.clone();
+
         thread::spawn(move || {
             event.sync().expect("failed to sync event");
             callback(data);
+            drop(tensor_clone);
         });
     }
 
-    fn begin_execute(&self, device: Self::Device) -> Self::Executor {
+    fn begin_execute(
+        &self,
+        input_tensors: &TensorMap<Self>,
+        device: Self::Device,
+    ) -> Self::Executor {
         let cx = CudaContext::global(device).expect("failed to get CUDA context");
+
+        let allocation_stream = cx
+            .allocator()
+            .begin_stream(cx.previous_alloc_stream_for_thread());
+
+        for (_, tensor) in input_tensors.storages() {
+            tensor.mark_in_use_by_stream(allocation_stream);
+        }
+
         let streams = cx.stream_pool().expect("failed to get stream pool");
         let sync_events = streams
             .iter()
@@ -124,9 +141,7 @@ impl Backend for Cuda {
             sync_events,
             instr_index: 0,
             hold_allocations: Vec::new(),
-            allocation_stream: cx
-                .allocator()
-                .begin_stream(cx.previous_alloc_stream_for_thread()),
+            allocation_stream,
             synced_tensors: AHashSet::new(),
             synced_tensors_this_step: Vec::new(),
         }

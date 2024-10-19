@@ -1,6 +1,6 @@
 use crate::{
     backend::{Backend, BackendExt},
-    data_type::{DataType, DataTypeConversion},
+    data_type::{DataType, DataTypeConversion, DataVec, Float},
     device::Device,
     opgraph::{
         op,
@@ -15,8 +15,11 @@ use crate::{
 use parking_lot::Mutex;
 use slotmap::{Key, SecondaryMap};
 use std::{
+    future::Future,
     ops::{Add, Div, Mul, Neg, Sub},
+    pin::Pin,
     sync::{Arc, Weak},
+    task::{Context, Poll, Waker},
 };
 
 /// Raw type-erased tensor, with dynamic dimension,
@@ -33,75 +36,91 @@ impl RawTensor {
         self.shape().num_dims()
     }
 
-    pub fn from_vec<T: DataTypeConversion>(vec: Vec<T>, shape: [usize; D], device: Device) -> Self {
-        assert_eq!(
-            shape.iter().copied().product::<usize>(),
-            vec.len(),
-            "product of tensor dimensions must equal the length of the data"
-        );
+    pub fn from_vec(vec: impl Into<DataVec>, shape: impl Into<Shape>, device: Device) -> Self {
+        let vec = vec.into();
+        let shape = shape.into();
 
-        let builder = Arc::new(Mutex::new(OpGraphBuilder::new(device)));
+        if vec.data_type() == DataType::Bool {
+            assert_eq!(
+                shape.num_elements(),
+                (vec.len() + 31) / 32 * 32,
+                "product of tensor dimensions must equal the length of the data"
+            );
+        } else {
+            assert_eq!(
+                shape.num_elements(),
+                vec.len(),
+                "product of tensor dimensions must equal the length of the data"
+            );
+        }
+
         let inner = Arc::new(Mutex::new(TensorInner {
-            data: Data::Virtual(VirtualData {
-                graph: builder.clone(),
-                node: NodeId::null(),
-                data_type: T::data_type(),
+            data: Data::Concrete(match device {
+                #[cfg(feature = "cuda")]
+                Device::Cuda(device) => ConcreteData::Cuda(
+                    shape,
+                    crate::cuda::Cuda.create_tensor_with_data(vec, device),
+                ),
+                #[cfg(feature = "cpu")]
+                Device::Cpu => todo!(),
             }),
         }));
-
-        let mut builder = builder.lock();
-
-        let node = builder.new_op(
-            Op::UploadTensor(op::UploadTensor {
-                data: T::into_data_vec(vec),
-                descriptor: Descriptor {
-                    shape: Shape::new(shape),
-                    data_type: T::data_type(),
-                },
-            }),
-            &inner,
-        );
-
-        match &mut inner.lock().data {
-            Data::Virtual(data) => data.node = node,
-            _ => unreachable!(),
-        }
 
         Self { inner, device }
     }
 
-    pub fn from_slice<T: DataTypeConversion>(
-        slice: &[T],
-        shape: [usize; D],
-        device: Device,
-    ) -> Self {
-        Self::from_vec(slice.to_vec(), shape, device)
+    pub fn from_float<T: DataTypeConversion<Float>>(float: T, device: Device) -> Self {
+        Self::from_vec(T::into_data_vec(vec![float]), [1], device)
     }
 
-    pub fn into_vec<T: DataTypeConversion>(self) -> Vec<T> {
+    pub fn into_vec(self) -> IntoVec {
         self.make_concrete();
         let inner = self.inner.lock();
         let Data::Concrete(data) = &inner.data else {
             unreachable!("make_concrete() was called")
         };
+
+        let vec = Arc::new(Mutex::new(None));
+        let waker = Arc::new(Mutex::new(None));
+        let fut = IntoVec {
+            vec: vec.clone(),
+            waker: waker.clone(),
+        };
+
         match data {
             #[cfg(feature = "cuda")]
-            ConcreteData::Cuda(_, tensor) => crate::cuda::Cuda.tensor_to_vec(tensor),
+            ConcreteData::Cuda(_, tensor) => {
+                let Device::Cuda(device) = self.device else {
+                    unreachable!("mismatched device")
+                };
+                crate::cuda::Cuda.download_tensor(
+                    tensor,
+                    move |result| {
+                        *vec.lock() = Some(result);
+                        if let Some(waker) = waker.lock().take() {
+                            waker.wake();
+                        }
+                    },
+                    device,
+                );
+            }
             #[cfg(feature = "cpu")]
             ConcreteData::Cpu => todo!(),
         }
+
+        fut
     }
 
     /// # Panics
     /// Panics if the tensor does not have a length of exactly 1.
-    pub fn into_scalar<T: DataTypeConversion>(self) -> T {
-        let vec = self.into_vec::<T>();
+    pub async fn into_float<T: DataTypeConversion<Float>>(self) -> T {
         assert_eq!(
-            vec.len(),
+            self.shape().num_elements(),
             1,
             "Tensor::into_scalar called on tensor of length != 1"
         );
-        vec[0]
+        let vec = self.into_vec().await;
+        vec.to_floats::<T>()[0]
     }
 
     pub fn device(&self) -> Device {
@@ -268,7 +287,7 @@ impl RawTensor {
     }
 
     pub fn pow_scalar(self, power: f32) -> Self {
-        let rhs = RawTensor::from_scalar(power, self.device).broadcast_to(self.shape());
+        let rhs = RawTensor::from_float(power, self.device).broadcast_to(self.shape());
         self.pow(rhs)
     }
 
@@ -311,30 +330,6 @@ impl RawTensor {
     /// with a single dimension of length 1.
     pub fn reduce_sum(self, depth: u32) -> RawTensor {
         self.op_reduce(ReduceOp::Sum, depth)
-    }
-
-    pub(crate) fn reduce_sum_and_reshape(
-        self,
-        depth: u32,
-        new_shape: impl Into<Shape>,
-    ) -> RawTensor {
-        let (cx, this) = self.make_graph();
-        let reduced = Self::from_op(
-            &cx,
-            Op::Reduce(op::Reduce {
-                depth,
-                input: this,
-                op: ReduceOp::Sum,
-            }),
-        );
-        let (cx, this) = reduced.make_graph();
-        RawTensor::from_op(
-            &cx,
-            Op::Reshape(op::Reshape {
-                new_shape: new_shape.into(),
-                input: this,
-            }),
-        )
     }
 
     /// Performs mean reduction along the last `depth` dimensions
@@ -397,7 +392,7 @@ impl Add<f32> for RawTensor {
     type Output = RawTensor;
 
     fn add(self, rhs: f32) -> Self::Output {
-        let rhs = RawTensor::from_scalar(rhs, self.device).broadcast_to(self.shape());
+        let rhs = RawTensor::from_float(rhs, self.device).broadcast_to(self.shape());
         self + rhs
     }
 }
@@ -429,7 +424,7 @@ impl Mul<f32> for RawTensor {
     type Output = RawTensor;
 
     fn mul(self, rhs: f32) -> Self::Output {
-        let rhs = RawTensor::from_scalar(rhs, self.device).broadcast_to(self.shape());
+        let rhs = RawTensor::from_float(rhs, self.device).broadcast_to(self.shape());
         self * rhs
     }
 }
@@ -746,6 +741,24 @@ impl OpGraphBuilder {
             }
             #[cfg(feature = "cpu")]
             Device::Cpu => todo!(),
+        }
+    }
+}
+
+/// `Future` returned from `RawTensor::into_vec`.
+pub struct IntoVec {
+    vec: Arc<Mutex<Option<DataVec>>>,
+    waker: Arc<Mutex<Option<Waker>>>,
+}
+
+impl Future for IntoVec {
+    type Output = DataVec;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        *self.waker.lock() = Some(cx.waker().clone());
+        match self.vec.lock().take() {
+            Some(vec) => Poll::Ready(vec),
+            None => Poll::Pending,
         }
     }
 }
