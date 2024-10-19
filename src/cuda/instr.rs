@@ -6,7 +6,6 @@ use crate::{
         instr::cudnn_graph::CudnnGraph,
         Cuda,
     },
-    data_type::DataVec,
     opgraph::{NodeId, OpGraph},
 };
 use pointwise::PointwiseGraph;
@@ -17,7 +16,6 @@ pub mod pointwise;
 
 #[derive(Debug, Clone)]
 pub enum Instr {
-    UploadTensor { node: NodeId, data: DataVec },
     CudnnGraph(CudnnGraph),
     PointwiseGraph(PointwiseGraph),
 }
@@ -33,12 +31,6 @@ impl Instr {
         match self {
             Instr::CudnnGraph(instr) => instr.execute(tensors, stream, cx, hold_allocations),
             Instr::PointwiseGraph(instr) => instr.execute(tensors, stream, cx),
-            Instr::UploadTensor { node, data } => {
-                tensors
-                    .get_storage(*node)
-                    .initialize_with_data(data, stream)
-                    .expect("failed to copy data");
-            }
         }
     }
 }
@@ -46,7 +38,6 @@ impl Instr {
 impl Instruction<Cuda> for Instr {
     fn inputs(&self) -> Vec<NodeId> {
         match self {
-            Instr::UploadTensor { .. } => vec![],
             Instr::CudnnGraph(instr) => instr.inputs(),
             Instr::PointwiseGraph(instr) => instr.inputs(),
         }
@@ -54,7 +45,6 @@ impl Instruction<Cuda> for Instr {
 
     fn outputs(&self) -> Vec<NodeId> {
         match self {
-            Instr::UploadTensor { node, .. } => vec![*node],
             Instr::CudnnGraph(instr) => instr.outputs(),
             Instr::PointwiseGraph(instr) => instr.outputs(),
         }
@@ -82,7 +72,6 @@ impl Instruction<Cuda> for Instr {
         match self {
             Instr::CudnnGraph(instr) => instr.perf(),
             Instr::PointwiseGraph(instr) => instr.perf(),
-            Instr::UploadTensor { .. } => InstrPerf::MemoryBound,
         }
     }
 }

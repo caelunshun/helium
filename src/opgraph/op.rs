@@ -1,14 +1,12 @@
 use crate::{
-    data_type::{DataType, DataVec},
+    data_type::DataType,
     opgraph::{Descriptor, NodeId},
     shape::Shape,
 };
 use slotmap::SecondaryMap;
-use std::hash::{Hash, Hasher};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Op {
-    UploadTensor(UploadTensor),
     Matmul(Matmul),
     UnaryPointwise(UnaryPointwise),
     BinaryPointwise(BinaryPointwise),
@@ -29,7 +27,6 @@ impl Op {
             Op::BinaryPointwise(op) => vec![op.lhs, op.rhs],
             Op::ChangeDataType(op) => vec![op.input],
             Op::Reduce(op) => vec![op.input],
-            Op::UploadTensor(_) => vec![],
             Op::Broadcast(op) => vec![op.input],
             Op::Reshape(op) => vec![op.input],
             Op::SwapDims(op) => vec![op.input],
@@ -73,7 +70,6 @@ impl Op {
                     data_type: DataType::F32,
                 }
             }
-            Op::UploadTensor(op) => op.descriptor.clone(),
             Op::Reshape(op) => {
                 let input = get_input_descriptor(op.input);
                 Descriptor {
@@ -112,7 +108,6 @@ impl Op {
 
     pub fn kind(&self) -> OpKind {
         match self {
-            Op::UploadTensor(_) => OpKind::UploadTensor,
             Op::Matmul(_) => OpKind::Matmul,
             Op::SwapDims(_) => OpKind::SwapDims,
             Op::Reduce(_) => OpKind::Reduce,
@@ -128,7 +123,6 @@ impl Op {
 
     pub fn apply_node_mapping(&mut self, mapping: &SecondaryMap<NodeId, NodeId>) {
         match self {
-            Op::UploadTensor(_) => {}
             Op::Matmul(op) => {
                 op.input_a = mapping[op.input_a];
                 op.input_b = mapping[op.input_b];
@@ -170,7 +164,6 @@ impl Op {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum OpKind {
-    UploadTensor,
     Matmul,
     SwapDims,
     Reduce,
@@ -268,26 +261,6 @@ impl ReduceOp {
             ReduceOp::Max => f32::NEG_INFINITY,
             ReduceOp::Min => f32::INFINITY,
         }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct UploadTensor {
-    pub data: DataVec,
-    pub descriptor: Descriptor,
-}
-
-impl PartialEq for UploadTensor {
-    fn eq(&self, other: &Self) -> bool {
-        self.descriptor == other.descriptor
-    }
-}
-
-impl Eq for UploadTensor {}
-
-impl Hash for UploadTensor {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.descriptor.hash(state);
     }
 }
 

@@ -75,8 +75,11 @@ impl CudaAllocator {
     }
 
     /// Creates a new stream ID for use with `allocate_in_stream`.
-    pub fn begin_stream(&mut self) -> StreamId {
-        self.block_allocator.begin_stream()
+    ///
+    /// If `parent` is `Some`, this signals that the parent stream
+    /// will complete before this new stream begins execution.
+    pub fn begin_stream(&mut self, parent: Option<StreamId>) -> StreamId {
+        self.block_allocator.begin_stream(parent)
     }
 
     /// Signals that a stream has completed execution and thus
@@ -103,15 +106,12 @@ impl CudaAllocator {
 
         self.process_dropped_memories();
 
-        let block: Block = match self
-            .block_allocator
-            .allocate_with_opt_stream(size, align, stream)
-        {
+        let block: Block = match self.block_allocator.allocate(size, align, stream) {
             Some(b) => b,
             None => {
                 self.allocate_page_for_at_least(size)?;
                 self.block_allocator
-                    .allocate(size, align)
+                    .allocate(size, align, stream)
                     .expect("new page should accommodate allocation")
             }
         };
@@ -123,7 +123,7 @@ impl CudaAllocator {
         Ok(Memory {
             ptr,
             len: size,
-            block,
+            block: Mutex::new(block),
             on_drop: Arc::clone(&self.dropped_memories),
         })
     }
@@ -155,7 +155,7 @@ pub struct Memory {
     ptr: CUdeviceptr,
     len: u64,
     /// Block returned from the block allocator
-    block: Block,
+    block: Mutex<Block>,
     on_drop: Arc<Mutex<Vec<Block>>>,
 }
 
@@ -167,11 +167,15 @@ impl Memory {
     pub fn len(&self) -> u64 {
         self.len
     }
+
+    pub fn mark_in_use_by_stream(&self, stream: StreamId) {
+        self.block.lock().mark_in_use_by_stream(stream);
+    }
 }
 
 impl Drop for Memory {
     fn drop(&mut self) {
-        self.on_drop.lock().push(self.block);
+        self.on_drop.lock().push(self.block.get_mut().clone());
     }
 }
 

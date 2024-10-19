@@ -1,20 +1,40 @@
 use crate::{
     cuda::{
         allocator::{Memory, StreamId},
-        context::{CudaContext, CudaStream},
+        context::{CudaContext, CudaEvent, CudaStream},
         error::CudaError,
     },
-    data_type::{DataClassTrait, DataType, DataVec},
+    data_type::{DataType, DataVec},
 };
 use cudarc::{driver, driver::sys::CUdeviceptr};
 use half::{bf16, f16};
-use std::{mem, sync::Arc};
+use std::{
+    mem,
+    mem::MaybeUninit,
+    sync::{atomic::AtomicU64, Arc},
+};
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct TensorStorageId(u64);
+
+impl TensorStorageId {
+    fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        Self(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
+}
 
 #[derive(Clone)]
 pub struct TensorStorage {
     memory: Arc<Memory>,
     data_type: DataType,
-    num_elements: usize,
+    id: TensorStorageId,
+
+    /// If the tensor is currently being computed on the GPU,
+    /// or a CPU->GPU transfer operation is in progress, this event
+    /// will be signaled once said operation completes and the tensor
+    /// is safe to use.
+    ready_event: Arc<CudaEvent>,
 }
 
 impl TensorStorage {
@@ -22,18 +42,30 @@ impl TensorStorage {
         data_type: DataType,
         len: usize,
         cx: &CudaContext,
-        allocation_stream: StreamId,
+        allocation_stream: Option<StreamId>,
     ) -> Result<Self, CudaError> {
         const ALIGN: u64 = 64;
-        let num_bytes = (len * data_type.size_in_bits() + 7) / 8;
-        let memory =
-            cx.allocator()
-                .allocate_in_stream(num_bytes as u64, ALIGN, allocation_stream)?;
+
+        // Align the size to a multiple of 32 bits
+        let num_bytes = (len * data_type.size_in_bits() + 31) / 32 * 4;
+
+        let memory = match allocation_stream {
+            Some(allocation_stream) => {
+                cx.allocator()
+                    .allocate_in_stream(num_bytes as u64, ALIGN, allocation_stream)?
+            }
+            None => cx.allocator().allocate(num_bytes as u64, ALIGN)?,
+        };
         Ok(Self {
+            id: TensorStorageId::new(),
             memory: Arc::new(memory),
             data_type,
-            num_elements: len,
+            ready_event: Arc::new(CudaEvent::new()?),
         })
+    }
+
+    pub fn id(&self) -> TensorStorageId {
+        self.id
     }
 
     pub fn initialize_with_data(
@@ -47,6 +79,49 @@ impl TensorStorage {
             driver::result::memcpy_htod_async(self.device_ptr(), bytes, stream.raw() as _)?;
         }
         Ok(())
+    }
+
+    /// # Safety
+    /// The returned `DataVec` must live until the operation completes
+    /// in the stream.
+    pub unsafe fn async_copy_to_host(&self, stream: &CudaStream) -> Result<DataVec, CudaError> {
+        match self.data_type {
+            DataType::F16 => {
+                let mut data = vec![MaybeUninit::<f16>::uninit(); self.memory.len() as usize / 2];
+                unsafe {
+                    driver::result::memcpy_dtoh_async(&mut data, self.device_ptr(), stream.raw())?;
+                    Ok(DataVec::F16(mem::transmute(data)))
+                }
+            }
+            DataType::Bf16 => {
+                let mut data = vec![MaybeUninit::<bf16>::uninit(); self.memory.len() as usize / 2];
+                unsafe {
+                    driver::result::memcpy_dtoh_async(&mut data, self.device_ptr(), stream.raw())?;
+                    Ok(DataVec::Bf16(mem::transmute(data)))
+                }
+            }
+            DataType::F32 => {
+                let mut data = vec![MaybeUninit::<f32>::uninit(); self.memory.len() as usize / 4];
+                unsafe {
+                    driver::result::memcpy_dtoh_async(&mut data, self.device_ptr(), stream.raw())?;
+                    Ok(DataVec::F32(mem::transmute(data)))
+                }
+            }
+            DataType::U32 => {
+                let mut data = vec![MaybeUninit::<u32>::uninit(); self.memory.len() as usize / 4];
+                unsafe {
+                    driver::result::memcpy_dtoh_async(&mut data, self.device_ptr(), stream.raw())?;
+                    Ok(DataVec::U32(mem::transmute(data)))
+                }
+            }
+            DataType::Bool => {
+                let mut data = vec![MaybeUninit::<u32>::uninit(); self.memory.len() as usize / 4];
+                unsafe {
+                    driver::result::memcpy_dtoh_async(&mut data, self.device_ptr(), stream.raw())?;
+                    Ok(DataVec::Bool(mem::transmute(data)))
+                }
+            }
+        }
     }
 
     pub fn fill(&self, value: f32, stream: &CudaStream) -> Result<(), CudaError> {
@@ -97,6 +172,10 @@ impl TensorStorage {
             }
         }
         Ok(())
+    }
+
+    pub fn ready_event(&self) -> &Arc<CudaEvent> {
+        &self.ready_event
     }
 
     pub fn device_ptr(&self) -> CUdeviceptr {

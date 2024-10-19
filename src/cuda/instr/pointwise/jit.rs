@@ -1,7 +1,8 @@
 use crate::{
     cuda::kernel_jit::{Ident, KernelBuilder, KernelParam},
+    data_type::DataClass,
     opgraph::{
-        op::{self, BinaryPointwiseOp, Broadcast, Op, ReduceOp, UnaryPointwiseOp},
+        op::{self, BinaryPointwiseOp, Broadcast, CompareOp, Op, ReduceOp, UnaryPointwiseOp},
         subgraph::OpSubgraph,
         Intermediate, Node, NodeId,
     },
@@ -99,7 +100,21 @@ pub fn generate_kernel(subgraph: &OpSubgraph) -> KernelBuilder {
             let dtype = subgraph.graph().get(output).descriptor().data_type;
             let param = kernel.param(KernelParam::Output(output), dtype);
             let typ = KernelBuilder::cpp_data_type(dtype);
-            kernel.statement(format!("{param}[out_index] = static_cast<{typ}>({val});"));
+
+            match dtype.class() {
+                DataClass::Float | DataClass::Int => {
+                    kernel.statement(format!("{param}[out_index] = static_cast<{typ}>({val});"));
+                }
+                DataClass::Bool => {
+                    kernel.statement(formatdoc! {"
+                    if ({val}) {{
+                        atomicOr({param} + out_index / 32, 1 << (out_index % 32)));
+                    }} else {{
+                        atomicAnd({param} + out_index / 32, !(1 << (out_index % 32)));
+                    }}
+                    "});
+                }
+            }
         }
     }
 
@@ -199,17 +214,35 @@ fn compute_node_output(
     cx.results_at_position
         .insert(position.clone(), ident.clone());
 
-    if subgraph.inputs().any(|x| x == node) {
+    if let Some(input) = subgraph.inputs().find(|x| *x == node) {
         // Load from memory.
         let index = index_mapping.derive_index("out_index", kernel);
         let array = &cx.input_vars[&node];
-        kernel.statement(format!(
-            "float {ident} = static_cast<float>({array}[{index}]);"
-        ));
+
+        let input = subgraph.graph().get(input);
+        let class = input.descriptor().data_type.class();
+        match class {
+            DataClass::Float => {
+                kernel.statement(format!(
+                    "float {ident} = static_cast<float>({array}[{index}]);"
+                ));
+            }
+            DataClass::Int => {
+                kernel.statement(format!(
+                    "uint32_t {ident} = static_cast<uint32_t>({array}[{index}]);"
+                ));
+            }
+            DataClass::Bool => {
+                kernel.statement(format!(
+                    "bool {ident} = ({array}[{index} / 32] >> ({index} % 32)) & 1 != 0;"
+                ));
+            }
+        }
+
         return ident;
     }
 
-    let Node::Intermediate(Intermediate { op, .. }) = subgraph.graph().get(node) else {
+    let Node::Intermediate(Intermediate { op, descriptor }) = subgraph.graph().get(node) else {
         unreachable!("internal node must be an intermediate")
     };
 
@@ -272,7 +305,8 @@ fn compute_node_output(
                 cx,
             );
             kernel.statement(format!(
-                "float {ident} = {};",
+                "{} {ident} = {};",
+                cpp_data_class(descriptor.data_type.class()),
                 unary_pointwise_op(&input, *op)
             ));
         }
@@ -296,8 +330,63 @@ fn compute_node_output(
                 cx,
             );
             kernel.statement(format!(
-                "float {ident} = {};",
-                binary_pointwise_op(&lhs, &rhs, *op)
+                "{} {ident} = {};",
+                cpp_data_class(descriptor.data_type.class()),
+                binary_pointwise_op(&lhs, &rhs, *op, descriptor.data_type.class())
+            ));
+        }
+        Op::Compare(op::Compare { lhs, rhs, op }) => {
+            let lhs = compute_node_output(
+                subgraph,
+                &Position {
+                    node: *lhs,
+                    index_mapping: index_mapping.clone(),
+                },
+                kernel,
+                cx,
+            );
+            let rhs = compute_node_output(
+                subgraph,
+                &Position {
+                    node: *rhs,
+                    index_mapping: index_mapping.clone(),
+                },
+                kernel,
+                cx,
+            );
+            kernel.statement(format!("bool {ident} = {};", compare_op(&lhs, &rhs, *op)));
+        }
+        Op::Select(op::Select { lhs, rhs, selector }) => {
+            let lhs = compute_node_output(
+                subgraph,
+                &Position {
+                    node: *lhs,
+                    index_mapping: index_mapping.clone(),
+                },
+                kernel,
+                cx,
+            );
+            let rhs = compute_node_output(
+                subgraph,
+                &Position {
+                    node: *rhs,
+                    index_mapping: index_mapping.clone(),
+                },
+                kernel,
+                cx,
+            );
+            let selector = compute_node_output(
+                subgraph,
+                &Position {
+                    node: *selector,
+                    index_mapping: index_mapping.clone(),
+                },
+                kernel,
+                cx,
+            );
+            kernel.statement(format!(
+                "{} {ident} = {selector} ? {rhs} : {lhs};",
+                cpp_data_class(descriptor.data_type.class())
             ));
         }
         Op::Reduce(op) => {
@@ -356,9 +445,38 @@ fn compute_node_output(
             }}
             "});
         }
+        Op::ChangeDataType(op::ChangeDataType { input, target_type })
+            if target_type.class()
+                != subgraph.graph().get(*input).descriptor().data_type.class() =>
+        {
+            // Change in data class.
+            let in_class = subgraph.graph().get(*input).descriptor().data_type.class();
+            let out_class = target_type.class();
+
+            let input = compute_node_output(
+                subgraph,
+                &Position {
+                    node: *input,
+                    index_mapping: index_mapping.clone(),
+                },
+                kernel,
+                cx,
+            );
+
+            let expr = match (in_class, out_class) {
+                (DataClass::Float, DataClass::Bool) => format!("{input} != 0.0f"),
+                (DataClass::Bool, DataClass::Float) => format!("{input} ? 1.0f : 0.0f"),
+                (DataClass::Float, DataClass::Int) => format!("static_cast<uint32_t>({input})"),
+                (DataClass::Int, DataClass::Float) => format!("static_cast<float>({input})"),
+                (DataClass::Bool, DataClass::Int) => format!("{input} ? 1 : 0"),
+                (DataClass::Int, DataClass::Bool) => format!("{input} != 0"),
+                _ => unreachable!("in_class != out_class"),
+            };
+            kernel.statement(format!("{} {ident} = {expr};", cpp_data_class(out_class)));
+        }
         // No-ops in the context of pointwise kernel
-        // (ChangeDataType happens when loading inputs / storing
-        // outputs, all compute is in float32)
+        // (different data type within same data class only affects
+        // load/stores and not intermediate computations)
         Op::Reshape(op::Reshape { input, .. })
         | Op::ChangeDataType(op::ChangeDataType { input, .. }) => {
             return compute_node_output(
@@ -393,13 +511,26 @@ fn unary_pointwise_op(input: &str, op: UnaryPointwiseOp) -> String {
     }
 }
 
-fn binary_pointwise_op(lhs: &str, rhs: &str, op: BinaryPointwiseOp) -> String {
+fn binary_pointwise_op(lhs: &str, rhs: &str, op: BinaryPointwiseOp, class: DataClass) -> String {
     match op {
         BinaryPointwiseOp::Add => format!("{lhs} + {rhs}"),
         BinaryPointwiseOp::Mul => format!("{lhs} * {rhs}"),
         BinaryPointwiseOp::Pow => format!("powf({lhs}, {rhs})"),
-        BinaryPointwiseOp::Min => format!("fminf({lhs}, {rhs})"),
-        BinaryPointwiseOp::Max => format!("fmaxf({lhs}, {rhs})"),
+        BinaryPointwiseOp::Min if class == DataClass::Float => format!("fminf({lhs}, {rhs})"),
+        BinaryPointwiseOp::Min => format!("min({lhs}, {rhs})"),
+        BinaryPointwiseOp::Max if class == DataClass::Float => format!("fmaxf({lhs}, {rhs})"),
+        BinaryPointwiseOp::Max => format!("max({lhs}, {rhs})"),
+    }
+}
+
+fn compare_op(lhs: &str, rhs: &str, op: CompareOp) -> String {
+    match op {
+        CompareOp::Equal => format!("{lhs} == {rhs}"),
+        CompareOp::NotEqual => format!("{lhs} != {rhs}"),
+        CompareOp::LessThan => format!("{lhs} < {rhs}"),
+        CompareOp::LessThanOrEqual => format!("{lhs} <= {rhs}"),
+        CompareOp::GreaterThan => format!("{lhs} > {rhs}"),
+        CompareOp::GreaterThanOrEqual => format!("{lhs} >= {rhs}"),
     }
 }
 
@@ -557,6 +688,16 @@ impl IndexMapping {
         };
         kernel.statement(format!("uint32_t {ident} = {expr};"));
         ident
+    }
+}
+
+/// Returns the C++ type used for intermediate computations
+/// in the given data class.
+fn cpp_data_class(class: DataClass) -> &'static str {
+    match class {
+        DataClass::Float => "float",
+        DataClass::Int => "uint32_t",
+        DataClass::Bool => "bool",
     }
 }
 

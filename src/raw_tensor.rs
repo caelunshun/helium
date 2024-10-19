@@ -19,18 +19,20 @@ use std::{
     sync::{Arc, Weak},
 };
 
-/// Represents a tensor of dimension `D`.
-///
-/// Tensor data is immutable. Tensors can be cheaply
-/// cloned like an `Arc`.
+/// Raw type-erased tensor, with dynamic dimension,
+/// data class, and data type. Does not store backpropagation
+/// information.
 #[derive(Clone)]
-pub struct Tensor<const D: usize> {
+pub struct RawTensor {
     inner: Arc<Mutex<TensorInner>>,
     device: Device,
 }
 
-/// API functions.
-impl<const D: usize> Tensor<D> {
+impl RawTensor {
+    pub fn num_dims(&self) -> usize {
+        self.shape().num_dims()
+    }
+
     pub fn from_vec<T: DataTypeConversion>(vec: Vec<T>, shape: [usize; D], device: Device) -> Self {
         assert_eq!(
             shape.iter().copied().product::<usize>(),
@@ -106,14 +108,8 @@ impl<const D: usize> Tensor<D> {
         self.device
     }
 
-    pub fn shape(&self) -> [usize; D] {
-        self.inner
-            .lock()
-            .data
-            .shape()
-            .dims()
-            .try_into()
-            .expect("dimension does not match D const parameter?")
+    pub fn shape(&self) -> Shape {
+        self.inner.lock().data.shape()
     }
 
     pub fn data_type(&self) -> DataType {
@@ -126,23 +122,22 @@ impl<const D: usize> Tensor<D> {
 
     /// Row-major matrix multiplication.
     pub fn matmul(self, rhs: Self) -> Self {
-        const {
-            if D < 2 {
-                panic!("matrix multiplication requires tensors of dimension >= 2");
-            }
+        let d = self.num_dims();
+        if d < 2 {
+            panic!("matrix multiplication requires tensors of dimension >= 2");
         }
 
         let shape_lhs = self.shape();
         let shape_rhs = rhs.shape();
 
         assert_eq!(
-            shape_lhs[D - 1],
-            shape_rhs[D - 2],
+            shape_lhs[d - 1],
+            shape_rhs[d - 2],
             "invalid dimensions for matmul: {}x{} (lhs) is not compatible with {}x{} (rhs)",
-            shape_lhs[D - 2],
-            shape_lhs[D - 1],
-            shape_rhs[D - 2],
-            shape_rhs[D - 1],
+            shape_lhs[d - 2],
+            shape_lhs[d - 1],
+            shape_rhs[d - 2],
+            shape_rhs[d - 1],
         );
 
         assert_eq!(
@@ -151,10 +146,10 @@ impl<const D: usize> Tensor<D> {
             "matmul only supported when A and B have the same data type"
         );
 
-        if D > 2 {
+        if d > 2 {
             assert_eq!(
-                &self.shape()[..D - 2],
-                &rhs.shape()[..D - 2],
+                &self.shape().dims()[..d - 2],
+                &rhs.shape().dims()[..d - 2],
                 "for batched matmul, all batch dimensions must have the same size"
             );
         }
@@ -172,24 +167,25 @@ impl<const D: usize> Tensor<D> {
 
     /// Swaps last two dimensions.
     pub fn transpose(self) -> Self {
-        const {
-            if D < 2 {
-                panic!("transpose requires at least two dimensions");
-            }
+        let num_dims = self.num_dims();
+        if num_dims < 2 {
+            panic!("transpose requires at least two dimensions");
         }
 
-        self.swap_dims(D - 1, D - 2)
+        self.swap_dims(num_dims - 1, num_dims - 2)
     }
 
     /// Swaps the given two dimensions.
     pub fn swap_dims(self, axis_a: usize, axis_b: usize) -> Self {
         assert!(
-            axis_a < D,
-            "swap_dims: axis {axis_a} out of bounds for tensor of dimension {D}"
+            axis_a < self.num_dims(),
+            "swap_dims: axis {axis_a} out of bounds for tensor of dimension {}",
+            self.num_dims()
         );
         assert!(
-            axis_b < D,
-            "swap_dims: axis {axis_b} out of bounds for tensor of dimension {D}"
+            axis_b < self.num_dims(),
+            "swap_dims: axis {axis_b} out of bounds for tensor of dimension {}",
+            self.num_dims()
         );
 
         let (cx, this) = self.make_graph();
@@ -207,18 +203,22 @@ impl<const D: usize> Tensor<D> {
     ///
     /// Dimensions of the output must match dimensions of `self`
     /// except where the `self` dimension is of size 1.
-    pub fn broadcast_to<const D2: usize>(self, new_shape: [usize; D2]) -> Tensor<D2> {
-        if &new_shape[..] == &self.shape()[..] {
+    pub fn broadcast_to(self, new_shape: impl Into<Shape>) -> RawTensor {
+        let new_shape = new_shape.into();
+        let d = self.num_dims();
+        let d2 = new_shape.num_dims();
+
+        if new_shape == self.shape() {
             // No need for broadcast, optimize out by returning
             // `self`.
-            return Tensor {
+            return RawTensor {
                 inner: self.inner,
                 device: self.device,
             };
         }
 
         assert!(
-            new_shape.iter().all(|&x| x != 0),
+            new_shape.dims().iter().all(|&x| x != 0),
             "dimension cannot be of size zero"
         );
 
@@ -226,35 +226,37 @@ impl<const D: usize> Tensor<D> {
 
         for (reverse_index, (old, new)) in self
             .shape()
-            .into_iter()
+            .dims()
+            .iter()
+            .copied()
             .rev()
-            .zip(new_shape.into_iter().rev())
+            .zip(new_shape.dims().into_iter().rev())
             .enumerate()
         {
-            let index = D2 - reverse_index - 1;
+            let index = d2 - reverse_index - 1;
             if old != 1 {
                 assert_eq!(
-                    old, new,
+                    old, *new,
                     "cannot broadcast axis {index} that is not of size 1 (actual size is {old})"
                 );
             }
 
-            if old == 1 && new != 1 {
-                broadcast_axes.push(BroadcastAxis::new(index, new));
+            if old == 1 && *new != 1 {
+                broadcast_axes.push(BroadcastAxis::new(index, *new));
             }
         }
-        if D2 > D {
-            for i in 0..(D2 - D) {
+        if d2 > d {
+            for i in 0..(d2 - d) {
                 broadcast_axes.push(BroadcastAxis::new(i, new_shape[i]));
             }
         }
 
         let (cx, this) = self.make_graph();
-        Tensor::from_op(
+        RawTensor::from_op(
             &cx,
             Op::Broadcast(op::Broadcast {
                 input: this,
-                new_dim_count: D2,
+                new_dim_count: d2,
                 broadcast_axes,
             }),
         )
@@ -266,7 +268,7 @@ impl<const D: usize> Tensor<D> {
     }
 
     pub fn pow_scalar(self, power: f32) -> Self {
-        let rhs = Tensor::from_scalar(power, self.device).broadcast_to(self.shape());
+        let rhs = RawTensor::from_scalar(power, self.device).broadcast_to(self.shape());
         self.pow(rhs)
     }
 
@@ -307,15 +309,15 @@ impl<const D: usize> Tensor<D> {
     /// Performs sum reduction along the last `depth` dimensions
     /// of the tensor. The last `depth` dimensions are replaced
     /// with a single dimension of length 1.
-    pub fn reduce_sum<const D2: usize>(self, depth: u32) -> Tensor<D2> {
+    pub fn reduce_sum(self, depth: u32) -> RawTensor {
         self.op_reduce(ReduceOp::Sum, depth)
     }
 
-    pub(crate) fn reduce_sum_and_reshape<const D2: usize>(
+    pub(crate) fn reduce_sum_and_reshape(
         self,
         depth: u32,
-        new_shape: [usize; D2],
-    ) -> Tensor<D2> {
+        new_shape: impl Into<Shape>,
+    ) -> RawTensor {
         let (cx, this) = self.make_graph();
         let reduced = Self::from_op(
             &cx,
@@ -326,10 +328,10 @@ impl<const D: usize> Tensor<D> {
             }),
         );
         let (cx, this) = reduced.make_graph();
-        Tensor::from_op(
+        RawTensor::from_op(
             &cx,
             Op::Reshape(op::Reshape {
-                new_shape: Shape::new(new_shape),
+                new_shape: new_shape.into(),
                 input: this,
             }),
         )
@@ -338,34 +340,34 @@ impl<const D: usize> Tensor<D> {
     /// Performs mean reduction along the last `depth` dimensions
     /// of the tensor. The last `depth` dimensions are replaced
     /// with a single dimension of length 1.
-    pub fn reduce_mean<const D2: usize>(self, depth: u32) -> Tensor<D2> {
+    pub fn reduce_mean(self, depth: u32) -> RawTensor {
         self.op_reduce(ReduceOp::Mean, depth)
     }
 
     /// Performs min reduction along the last `depth` dimensions
     /// of the tensor. The last `depth` dimensions are replaced
     /// with a single dimension of length 1.
-    pub fn reduce_min<const D2: usize>(self, depth: u32) -> Tensor<D2> {
+    pub fn reduce_min(self, depth: u32) -> RawTensor {
         self.op_reduce(ReduceOp::Min, depth)
     }
 
     /// Performs max reduction along the last `depth` dimensions
     /// of the tensor. The last `depth` dimensions are replaced
     /// with a single dimension of length 1.
-    pub fn reduce_max<const D2: usize>(self, depth: u32) -> Tensor<D2> {
+    pub fn reduce_max(self, depth: u32) -> RawTensor {
         self.op_reduce(ReduceOp::Max, depth)
     }
 
-    pub fn reshape<const D2: usize>(self, new_shape: [usize; D2]) -> Tensor<D2> {
-        let new_shape = Shape::new(new_shape);
+    pub fn reshape(self, new_shape: impl Into<Shape>) -> RawTensor {
+        let new_shape = new_shape.into();
         assert_eq!(
-            self.shape().iter().product::<usize>(),
+            self.shape().num_elements(),
             new_shape.num_elements(),
             "reshape() called with non-matching shape"
         );
 
         let (cx, this) = self.make_graph();
-        Tensor::from_op(
+        RawTensor::from_op(
             &cx,
             Op::Reshape(op::Reshape {
                 input: this,
@@ -373,140 +375,67 @@ impl<const D: usize> Tensor<D> {
             }),
         )
     }
-
-    /// Verifies that `D2 == D`, and returns `self` as a `Tensor<D2>`.
-    /// This is used to bypass some type system limitations.
-    pub fn transmute_dim<const D2: usize>(self) -> Tensor<D2> {
-        const {
-            if D != D2 {
-                panic!("D != D2 for transmute_dim()");
-            }
-        }
-        Tensor {
-            device: self.device,
-            inner: self.inner,
-        }
-    }
 }
 
-impl Tensor<1> {
-    pub fn from_scalar<T: DataTypeConversion>(x: T, device: Device) -> Self {
-        Self::from_vec(vec![x], [1], device)
-    }
-
-    pub fn from_array<T: DataTypeConversion, const N: usize>(arr: [T; N], device: Device) -> Self {
-        Self::from_vec(arr.to_vec(), [N], device)
-    }
-}
-
-impl Tensor<2> {
-    pub fn from_array<T: DataTypeConversion, const N1: usize, const N2: usize>(
-        arr: [[T; N2]; N1],
-        device: Device,
-    ) -> Self {
-        Self::from_vec(
-            arr.into_iter().flatten().collect::<Vec<T>>(),
-            [N1, N2],
-            device,
-        )
-    }
-}
-
-impl Tensor<3> {
-    pub fn from_array<T: DataTypeConversion, const N1: usize, const N2: usize, const N3: usize>(
-        arr: [[[T; N3]; N2]; N1],
-        device: Device,
-    ) -> Self {
-        Self::from_vec(
-            arr.into_iter().flatten().flatten().collect::<Vec<T>>(),
-            [N1, N2, N3],
-            device,
-        )
-    }
-}
-
-impl Tensor<4> {
-    pub fn from_array<
-        T: DataTypeConversion,
-        const N1: usize,
-        const N2: usize,
-        const N3: usize,
-        const N4: usize,
-    >(
-        arr: [[[[T; N4]; N3]; N2]; N1],
-        device: Device,
-    ) -> Self {
-        Self::from_vec(
-            arr.into_iter()
-                .flatten()
-                .flatten()
-                .flatten()
-                .collect::<Vec<T>>(),
-            [N1, N2, N3, N4],
-            device,
-        )
-    }
-}
-
-impl<const D: usize> Neg for Tensor<D> {
-    type Output = Tensor<D>;
+impl Neg for RawTensor {
+    type Output = RawTensor;
 
     fn neg(self) -> Self::Output {
         self.op_unary_pointwise(UnaryPointwiseOp::Neg)
     }
 }
 
-impl<const D: usize> Add for Tensor<D> {
-    type Output = Tensor<D>;
+impl Add for RawTensor {
+    type Output = RawTensor;
 
     fn add(self, rhs: Self) -> Self::Output {
         self.op_binary_pointwise(&rhs, BinaryPointwiseOp::Add)
     }
 }
 
-impl<const D: usize> Add<f32> for Tensor<D> {
-    type Output = Tensor<D>;
+impl Add<f32> for RawTensor {
+    type Output = RawTensor;
 
     fn add(self, rhs: f32) -> Self::Output {
-        let rhs = Tensor::from_scalar(rhs, self.device).broadcast_to(self.shape());
+        let rhs = RawTensor::from_scalar(rhs, self.device).broadcast_to(self.shape());
         self + rhs
     }
 }
 
-impl<const D: usize> Sub for Tensor<D> {
-    type Output = Tensor<D>;
+impl Sub for RawTensor {
+    type Output = RawTensor;
 
     fn sub(self, rhs: Self) -> Self::Output {
         self + -rhs
     }
 }
 
-impl<const D: usize> Sub<f32> for Tensor<D> {
-    type Output = Tensor<D>;
+impl Sub<f32> for RawTensor {
+    type Output = RawTensor;
 
     fn sub(self, rhs: f32) -> Self::Output {
         self + -rhs
     }
 }
 
-impl<const D: usize> Mul for Tensor<D> {
-    type Output = Tensor<D>;
+impl Mul for RawTensor {
+    type Output = RawTensor;
 
     fn mul(self, rhs: Self) -> Self::Output {
         self.op_binary_pointwise(&rhs, BinaryPointwiseOp::Mul)
     }
 }
-impl<const D: usize> Mul<f32> for Tensor<D> {
-    type Output = Tensor<D>;
+impl Mul<f32> for RawTensor {
+    type Output = RawTensor;
 
     fn mul(self, rhs: f32) -> Self::Output {
-        let rhs = Tensor::from_scalar(rhs, self.device).broadcast_to(self.shape());
+        let rhs = RawTensor::from_scalar(rhs, self.device).broadcast_to(self.shape());
         self * rhs
     }
 }
 
-impl<const D: usize> Div for Tensor<D> {
-    type Output = Tensor<D>;
+impl Div for RawTensor {
+    type Output = RawTensor;
 
     #[allow(clippy::suspicious_arithmetic_impl)]
     fn div(self, rhs: Self) -> Self::Output {
@@ -514,8 +443,8 @@ impl<const D: usize> Div for Tensor<D> {
     }
 }
 
-impl<const D: usize> Div<f32> for Tensor<D> {
-    type Output = Tensor<D>;
+impl Div<f32> for RawTensor {
+    type Output = RawTensor;
 
     #[allow(clippy::suspicious_arithmetic_impl)]
     fn div(self, rhs: f32) -> Self::Output {
@@ -524,7 +453,7 @@ impl<const D: usize> Div<f32> for Tensor<D> {
 }
 
 /// Internal functions.
-impl<const D: usize> Tensor<D> {
+impl RawTensor {
     fn from_op(cx_arc: &OpGraphBuilderHandle, op: Op) -> Self {
         let mut cx = cx_arc.lock();
         let device = cx.device;
@@ -605,7 +534,7 @@ impl<const D: usize> Tensor<D> {
             rhs.shape()
         );
         let (cx, this) = self.make_graph();
-        Tensor::from_op(
+        RawTensor::from_op(
             &cx,
             Op::BinaryPointwise(BinaryPointwise {
                 lhs: this,
@@ -617,18 +546,12 @@ impl<const D: usize> Tensor<D> {
 
     fn op_unary_pointwise(&self, op: UnaryPointwiseOp) -> Self {
         let (cx, this) = self.make_graph();
-        Tensor::from_op(&cx, Op::UnaryPointwise(UnaryPointwise { input: this, op }))
+        RawTensor::from_op(&cx, Op::UnaryPointwise(UnaryPointwise { input: this, op }))
     }
 
-    fn op_reduce<const D2: usize>(&self, op: ReduceOp, depth: u32) -> Tensor<D2> {
-        assert_eq!(
-            D2,
-            D - depth as usize + 1,
-            "result tensor dimensions do not match reduction depth"
-        );
-
+    fn op_reduce(&self, op: ReduceOp, depth: u32) -> RawTensor {
         let (cx, this) = self.make_graph();
-        Tensor::from_op(
+        RawTensor::from_op(
             &cx,
             Op::Reduce(Reduce {
                 input: this,

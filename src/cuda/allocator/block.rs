@@ -1,5 +1,8 @@
 use slotmap::SlotMap;
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    mem,
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct BlockAllocator {
@@ -24,36 +27,42 @@ impl BlockAllocator {
             page,
             start: 0,
             size,
-            free_only_in_stream: None,
+            in_use_by_streams: BTreeSet::new(),
         };
         self.add_free_block(new_block);
 
         page
     }
 
-    pub fn allocate(&mut self, size: u64, align: u64) -> Option<Block> {
-        self.allocate_with_opt_stream(size, align, None)
-    }
-
-    #[allow(unused)]
-    pub fn allocate_in_stream(&mut self, size: u64, align: u64, stream: StreamId) -> Option<Block> {
-        self.allocate_with_opt_stream(size, align, Some(stream))
-    }
-
-    pub fn allocate_with_opt_stream(
+    pub fn allocate(
         &mut self,
         size: u64,
         align: u64,
-        stream: Option<StreamId>,
+        allocating_stream: Option<StreamId>,
     ) -> Option<Block> {
         assert!(size > 0);
         assert!(align.is_power_of_two());
 
         for (_, size_class) in self.free_blocks_by_size.range(size..) {
             for &block_id in size_class {
-                let mut block = self.free_blocks[block_id];
+                let block = &self.free_blocks[block_id];
 
-                if block.free_only_in_stream.is_some() && block.free_only_in_stream != stream {
+                let matches_stream = match block.in_use_by_streams.len() {
+                    0 => true,
+                    1 => {
+                        let stream = block.in_use_by_streams.iter().copied().next().unwrap();
+                        match allocating_stream {
+                            Some(allocating_stream) => {
+                                stream == allocating_stream
+                                    || self.streams[allocating_stream].ancestors.contains(&stream)
+                            }
+                            None => false,
+                        }
+                    }
+                    _ => false,
+                };
+
+                if !matches_stream {
                     continue;
                 }
 
@@ -62,7 +71,7 @@ impl BlockAllocator {
                     continue;
                 }
 
-                self.remove_free_block(block_id);
+                let mut block = self.remove_free_block(block_id);
 
                 if offset != 0 {
                     let (unused, new_block) = block.split(offset);
@@ -72,12 +81,13 @@ impl BlockAllocator {
 
                 let remainder = block.size - size;
                 if remainder > 0 {
-                    let (new_block, unused) = block.split(block.size - remainder);
+                    let size = block.size;
+                    let (new_block, unused) = block.split(size - remainder);
                     self.add_free_block(unused);
                     block = new_block;
                 }
 
-                block.free_only_in_stream = stream;
+                block.in_use_by_streams.extend(allocating_stream);
                 return Some(block);
             }
         }
@@ -108,10 +118,10 @@ impl BlockAllocator {
             .map(|(_, &b)| b);
 
         for adjacent_id in [previous, next].into_iter().flatten() {
-            let adjacent = self.free_blocks[adjacent_id];
+            let adjacent = &self.free_blocks[adjacent_id];
             if block.can_merge(adjacent) {
-                block = block.merge(adjacent);
-                self.free_blocks.remove(adjacent_id);
+                let adjacent = adjacent.clone();
+                block = block.merge(self.free_blocks.remove(adjacent_id).unwrap());
                 assert!(
                     self.free_blocks_by_size
                         .get_mut(&adjacent.size)
@@ -123,34 +133,34 @@ impl BlockAllocator {
                     .remove(&adjacent.start)
                     .expect("not present in addr index");
 
-                if let Some(stream) = adjacent.free_only_in_stream {
+                for &stream in &block.in_use_by_streams {
                     assert!(
-                        self.streams[stream]
-                            .blocks_free_only_in_stream
-                            .remove(&adjacent_id),
-                        "not present in free_only_in_stream index"
+                        self.streams[stream].blocks_in_use.remove(&adjacent_id),
+                        "not present in blocks_in_use index"
                     );
                 }
             }
         }
 
         let block_id = self.free_blocks.insert(block);
+        let block = &mut self.free_blocks[block_id];
         self.free_blocks_by_size
             .entry(block.size)
             .or_default()
             .insert(block_id);
         page.free_blocks_by_addr.insert(block.start, block_id);
 
-        if let Some(stream) = block.free_only_in_stream {
+        block.in_use_by_streams.retain(|&stream| {
             if let Some(stream) = self.streams.get_mut(stream) {
-                stream.blocks_free_only_in_stream.insert(block_id);
+                stream.blocks_in_use.insert(block_id);
+                true
             } else {
-                self.free_blocks[block_id].free_only_in_stream = None;
+                false
             }
-        }
+        });
     }
 
-    fn remove_free_block(&mut self, block_id: BlockId) {
+    fn remove_free_block(&mut self, block_id: BlockId) -> Block {
         let block = self
             .free_blocks
             .remove(block_id)
@@ -171,29 +181,50 @@ impl BlockAllocator {
             self.free_blocks_by_size.remove(&block.size);
         }
 
-        if let Some(stream) = block.free_only_in_stream {
-            if let Some(stream) = self.streams.get_mut(stream) {
+        for &stream_id in &block.in_use_by_streams {
+            if let Some(stream) = self.streams.get_mut(stream_id) {
                 assert!(
-                    stream.blocks_free_only_in_stream.remove(&block_id),
-                    "block not in free_only_in_stream"
+                    stream.blocks_in_use.remove(&block_id),
+                    "block not in blocks_in_use"
                 );
             }
         }
+
+        block
     }
 
-    pub fn begin_stream(&mut self) -> StreamId {
-        self.streams.insert(Stream::default())
+    pub fn begin_stream(&mut self, parent: Option<StreamId>) -> StreamId {
+        let ancestors = match parent {
+            Some(p) => self.streams[p]
+                .ancestors
+                .iter()
+                .copied()
+                .chain([p])
+                .collect(),
+            None => BTreeSet::new(),
+        };
+
+        self.streams.insert(Stream {
+            ancestors,
+            ..Default::default()
+        })
     }
 
     pub fn end_stream(&mut self, id: StreamId) {
         let stream = self.streams.remove(id).expect("stream already ended");
-        for block in stream.blocks_free_only_in_stream {
+        for block in stream.blocks_in_use {
+            let mut in_use_by_streams = mem::take(&mut self.free_blocks[block].in_use_by_streams);
+            in_use_by_streams.remove(&id);
             let modified_block = Block {
-                free_only_in_stream: None,
-                ..self.free_blocks[block]
+                in_use_by_streams,
+                ..self.free_blocks[block].clone()
             };
             self.remove_free_block(block);
             self.add_free_block(modified_block);
+        }
+
+        for stream in self.streams.values_mut() {
+            stream.ancestors.remove(&id);
         }
     }
 }
@@ -216,41 +247,47 @@ slotmap::new_key_type! {
      struct BlockId;
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Block {
     pub page: PageId,
     pub start: BlockAddr,
     pub size: BlockSize,
-    /// If the block was previously allocated within a stream,
-    /// then freed, and the stream is still alive,
-    /// this is the ID of that stream.
-    free_only_in_stream: Option<StreamId>,
+    /// Set of streams that may be currently using this block.
+    ///
+    /// A block can be allocated only if either
+    /// (a) this set is empty, in which case the block is definitely
+    /// not in use
+    /// (b) this set has size 1, and the allocating stream matches
+    /// the element of the set, in which case the block can be in
+    /// use by the stream but will no longer be in use by the time
+    /// the allocation is used
+    in_use_by_streams: BTreeSet<StreamId>,
 }
 
 impl Block {
-    pub fn is_aligned_to(self, align: u64) -> bool {
+    pub fn is_aligned_to(&self, align: u64) -> bool {
         self.start % align == 0
     }
 
-    pub fn align_offset(self, align: u64) -> u64 {
+    pub fn align_offset(&self, align: u64) -> u64 {
         if self.is_aligned_to(align) {
             return 0;
         }
         align - (self.start % align)
     }
 
-    pub fn end(self) -> BlockAddr {
+    pub fn end(&self) -> BlockAddr {
         self.start + self.size
     }
 
-    pub fn can_merge(self, other: Self) -> bool {
+    pub fn can_merge(&self, other: &Self) -> bool {
         self.page == other.page
             && (self.start == other.end() || self.end() == other.start)
-            && self.free_only_in_stream == other.free_only_in_stream
+            && self.in_use_by_streams == other.in_use_by_streams
     }
 
     pub fn merge(self, other: Self) -> Self {
-        debug_assert!(self.can_merge(other));
+        debug_assert!(self.can_merge(&other));
         let start = self.start.min(other.start);
         let end = self.end().max(other.end());
         let size = end - start;
@@ -262,7 +299,7 @@ impl Block {
     }
 
     #[allow(unused)]
-    pub fn overlaps(self, other: Self) -> bool {
+    pub fn overlaps(&self, other: &Self) -> bool {
         (self.start >= other.start && self.start < other.end())
             || (other.start >= self.start && other.start < self.end())
     }
@@ -272,7 +309,7 @@ impl Block {
             Self {
                 start: self.start,
                 size: at,
-                ..self
+                ..self.clone()
             },
             Self {
                 start: self.start + at,
@@ -280,6 +317,10 @@ impl Block {
                 ..self
             },
         )
+    }
+
+    pub fn mark_in_use_by_stream(&mut self, stream: StreamId) {
+        self.in_use_by_streams.insert(stream);
     }
 }
 
@@ -289,8 +330,9 @@ slotmap::new_key_type! {
 
 #[derive(Debug, Clone, Default)]
 struct Stream {
-    /// List of blocks having `free_only_in_stream` set to this stream.
-    blocks_free_only_in_stream: BTreeSet<BlockId>,
+    blocks_in_use: BTreeSet<BlockId>,
+    /// List of (live) streams that happen-before this stream.
+    ancestors: BTreeSet<StreamId>,
 }
 
 #[cfg(test)]
@@ -304,18 +346,18 @@ mod tests {
         let mut allocator = BlockAllocator::new();
         allocator.add_page(1024);
 
-        let block1 = allocator.allocate(128, 256).unwrap();
+        let block1 = allocator.allocate(128, 256, None).unwrap();
         assert_eq!(block1.size, 128);
 
-        let block2 = allocator.allocate(1024 - 128, 128).unwrap();
+        let block2 = allocator.allocate(1024 - 128, 128, None).unwrap();
         assert_eq!(block2.size, 1024 - 128);
 
-        assert!(allocator.allocate(1, 1).is_none());
+        assert!(allocator.allocate(1, 1, None).is_none());
 
         allocator.deallocate(block1);
         allocator.deallocate(block2);
 
-        assert_eq!(allocator.allocate(1024, 8).unwrap().size, 1024);
+        assert_eq!(allocator.allocate(1024, 8, None).unwrap().size, 1024);
     }
 
     #[test]
@@ -328,10 +370,10 @@ mod tests {
         for _ in 0..25_000 {
             if allocated_blocks.is_empty() || rng.gen_bool(0.4) {
                 let size = rng.gen_range(1024..1024 * 1024 * 32);
-                let block = allocator.allocate(size, 256).unwrap();
+                let block = allocator.allocate(size, 256, None).unwrap();
                 assert_eq!(block.size, size);
                 assert!(block.is_aligned_to(256));
-                assert!(!allocated_blocks.iter().any(|b2| block.overlaps(*b2)));
+                assert!(!allocated_blocks.iter().any(|b2| block.overlaps(b2)));
                 allocated_blocks.push(block);
             } else {
                 let i = rng.gen_range(0..allocated_blocks.len());

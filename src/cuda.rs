@@ -1,20 +1,21 @@
 use crate::{
-    backend::{Backend, Executor, TensorMap},
+    backend::{Backend, Executor, Instruction, TensorMap},
     cuda::{
         allocator::{Memory, StreamId},
-        context::{CudaContext, CudaStream},
+        context::{CudaContext, CudaEvent, CudaStream},
         instr::{cudnn_graph::CudnnGraph, Instr},
-        tensor_storage::TensorStorage,
+        tensor_storage::{TensorStorage, TensorStorageId},
     },
-    data_type::DataType,
+    data_type::{DataType, DataVec},
     opgraph::{op::Op, subgraph::OpSubgraph, NodeId, OpGraph},
 };
+use ahash::AHashSet;
 use cudarc::{
     driver,
     driver::sys::{CUevent, CUevent_flags_enum, CUevent_wait_flags_enum},
 };
 use instr::pointwise::PointwiseGraph;
-use std::sync::Arc;
+use std::{sync::Arc, thread};
 
 mod allocator;
 pub mod context;
@@ -35,10 +36,6 @@ impl Backend for Cuda {
 
     fn make_instr_for_op(&self, op: &Op, graph: &Arc<OpGraph>, node_id: NodeId) -> Self::Instr {
         match op {
-            Op::UploadTensor(op) => Instr::UploadTensor {
-                node: node_id,
-                data: op.data.clone(),
-            },
             Op::SwapDims(_)
             | Op::UnaryPointwise(_)
             | Op::BinaryPointwise(_)
@@ -58,6 +55,59 @@ impl Backend for Cuda {
         }
     }
 
+    fn create_tensor_with_data(&self, data: DataVec, device: Self::Device) -> Self::TensorStorage {
+        let cx = CudaContext::global(device).expect("failed to get CUDA context");
+        let tensor = TensorStorage::new(data.data_type(), data.len(), cx, None)
+            .expect("failed to allocate tensor");
+        tensor
+            .initialize_with_data(&data, cx.htod_stream())
+            .expect("failed to initialize tensor with data");
+        tensor
+            .ready_event()
+            .record(cx.htod_stream())
+            .expect("failed to record event");
+
+        let event = tensor.ready_event().clone();
+
+        // `data` needs to live until the transfer completes.
+        // for now, we implement this by dropping the vec
+        // on a thread once the event completes.
+        thread::spawn(move || {
+            event.sync().expect("failed to sync on event");
+            drop(data);
+        });
+
+        tensor
+    }
+
+    fn download_tensor(
+        &self,
+        tensor: &Self::TensorStorage,
+        callback: impl FnOnce(DataVec) + Send + Sync + 'static,
+        device: Self::Device,
+    ) {
+        let cx = CudaContext::global(device).expect("failed to get CUDA context");
+        let event = CudaEvent::new().expect("failed to create CUDA event");
+
+        tensor
+            .ready_event()
+            .wait(cx.dtoh_stream())
+            .expect("failed to wait event");
+        let data = unsafe {
+            tensor
+                .async_copy_to_host(cx.dtoh_stream())
+                .expect("failed to copy tensor to host")
+        };
+        event
+            .record(cx.dtoh_stream())
+            .expect("failed to record event");
+
+        thread::spawn(move || {
+            event.sync().expect("failed to sync event");
+            callback(data);
+        });
+    }
+
     fn begin_execute(&self, device: Self::Device) -> Self::Executor {
         let cx = CudaContext::global(device).expect("failed to get CUDA context");
         let streams = cx.stream_pool().expect("failed to get stream pool");
@@ -74,7 +124,11 @@ impl Backend for Cuda {
             sync_events,
             instr_index: 0,
             hold_allocations: Vec::new(),
-            allocation_stream: cx.allocator().begin_stream(),
+            allocation_stream: cx
+                .allocator()
+                .begin_stream(cx.previous_alloc_stream_for_thread()),
+            synced_tensors: AHashSet::new(),
+            synced_tensors_this_step: Vec::new(),
         }
     }
 }
@@ -86,20 +140,14 @@ pub struct CudaExecutor {
     hold_allocations: Vec<Memory>,
     instr_index: usize,
     allocation_stream: StreamId,
+    synced_tensors: AHashSet<TensorStorageId>,
+    synced_tensors_this_step: Vec<TensorStorageId>,
 }
 
 impl Executor<Cuda> for CudaExecutor {
     fn begin_step(&mut self) {
         self.instr_index = 0;
         self.hold_allocations.clear();
-    }
-
-    fn execute_instr(&mut self, instr: &Instr, tensors: &mut TensorMap<Cuda>) {
-        let stream = &self.streams[self.instr_index % self.streams.len()];
-
-        instr.execute(tensors, stream, self.cx, &mut self.hold_allocations);
-
-        self.instr_index += 1;
     }
 
     fn allocate_tensor(
@@ -109,8 +157,36 @@ impl Executor<Cuda> for CudaExecutor {
         len: usize,
     ) -> <Cuda as Backend>::TensorStorage {
         let cx = CudaContext::global(device).unwrap();
-        TensorStorage::new(data_type, len, cx, self.allocation_stream)
+        TensorStorage::new(data_type, len, cx, Some(self.allocation_stream))
             .unwrap_or_else(|e| panic!("failed to allocate tensor for {len}x {data_type:?}: {e}"))
+    }
+
+    fn execute_instr(&mut self, instr: &Instr, tensors: &mut TensorMap<Cuda>) {
+        let stream = &self.streams[self.instr_index % self.streams.len()];
+
+        for input in instr.inputs() {
+            let storage = tensors.get_storage(input);
+            if !self.synced_tensors.contains(&storage.id()) {
+                storage
+                    .ready_event()
+                    .wait(stream)
+                    .expect("failed to wait on event");
+                self.synced_tensors_this_step.push(storage.id());
+            }
+        }
+
+        instr.execute(tensors, stream, self.cx, &mut self.hold_allocations);
+
+        self.instr_index += 1;
+
+        for output in instr.outputs() {
+            self.synced_tensors.insert(tensors.get_storage(output).id());
+            tensors
+                .get_storage(output)
+                .ready_event()
+                .record(stream)
+                .expect("failed to record event");
+        }
     }
 
     fn end_step(&mut self) {
@@ -134,23 +210,21 @@ impl Executor<Cuda> for CudaExecutor {
                 }
             }
         }
+        self.synced_tensors
+            .extend(self.synced_tensors_this_step.drain(..));
     }
 }
 
 impl Drop for CudaExecutor {
     fn drop(&mut self) {
-        for stream in self.streams {
-            unsafe {
-                driver::result::stream::synchronize(stream.raw())
-                    .expect("failed to synchronize stream");
-            }
-        }
         for event in self.sync_events.drain(..) {
             unsafe {
                 driver::result::event::destroy(event).expect("failed to destroy event");
             }
         }
         self.hold_allocations.clear();
+        self.cx
+            .set_previous_alloc_stream_for_thread(self.allocation_stream);
         self.cx.allocator().end_stream(self.allocation_stream);
     }
 }

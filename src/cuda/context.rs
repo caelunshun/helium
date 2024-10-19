@@ -1,4 +1,8 @@
-use crate::cuda::{allocator::CudaAllocator, cudnn::CudnnContext, error::CudaError};
+use crate::cuda::{
+    allocator::{CudaAllocator, StreamId},
+    cudnn::CudnnContext,
+    error::CudaError,
+};
 use cudarc::{
     driver,
     driver::{
@@ -7,7 +11,7 @@ use cudarc::{
                 CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
                 CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR,
             },
-            CUstream,
+            CUevent, CUevent_flags_enum, CUevent_wait_flags_enum, CUstream,
         },
         CudaDevice,
     },
@@ -15,6 +19,7 @@ use cudarc::{
 };
 use parking_lot::{Mutex, MutexGuard, RwLock};
 use std::{
+    cell::Cell,
     iter,
     sync::{Arc, OnceLock},
 };
@@ -28,6 +33,11 @@ pub struct CudaContext {
     cudnn_pool: ThreadLocal<CudnnContext>,
     sm_version: u32,
     loaded_kernels: Mutex<Vec<Arc<Ptx>>>,
+    previous_alloc_stream: ThreadLocal<Cell<Option<StreamId>>>,
+
+    /// Streams for memory transfer operations.
+    dtoh_stream: CudaStream,
+    htod_stream: CudaStream,
 }
 
 impl CudaContext {
@@ -63,17 +73,20 @@ impl CudaContext {
         let compute_minor = device.attribute(CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR)?;
 
         Ok(Self {
+            dtoh_stream: CudaStream::new(&device)?,
+            htod_stream: CudaStream::new(&device)?,
             device,
             allocator: Mutex::new(allocator),
             stream_pool: ThreadLocal::new(),
             cudnn_pool: ThreadLocal::new(),
             sm_version: (compute_major * 10 + compute_minor) as u32,
             loaded_kernels: Mutex::new(Vec::new()),
+            previous_alloc_stream: ThreadLocal::new(),
         })
     }
 
     pub fn stream_pool(&self) -> Result<&[CudaStream], CudaError> {
-        const STREAMS_PER_THREAD: usize = 4;
+        const STREAMS_PER_THREAD: usize = 2;
         self.stream_pool
             .get_or_try(|| {
                 let mut streams = Vec::new();
@@ -122,6 +135,24 @@ impl CudaContext {
         kernels.push(kernel.clone());
         Ok(())
     }
+
+    pub fn previous_alloc_stream_for_thread(&self) -> Option<StreamId> {
+        self.previous_alloc_stream.get_or_default().get()
+    }
+
+    pub fn set_previous_alloc_stream_for_thread(&self, stream: StreamId) {
+        self.previous_alloc_stream
+            .get_or_default()
+            .set(Some(stream));
+    }
+
+    pub fn dtoh_stream(&self) -> &CudaStream {
+        &self.dtoh_stream
+    }
+
+    pub fn htod_stream(&self) -> &CudaStream {
+        &self.htod_stream
+    }
 }
 
 /// Wrapper for a CUDA stream.
@@ -146,3 +177,55 @@ impl CudaStream {
 }
 
 unsafe impl Send for CudaStream {}
+unsafe impl Sync for CudaStream {}
+
+/// Wrapper for CUevent for synchronization on streams.
+pub struct CudaEvent {
+    raw: CUevent,
+}
+
+unsafe impl Send for CudaEvent {}
+unsafe impl Sync for CudaEvent {}
+
+impl CudaEvent {
+    pub fn new() -> Result<Self, CudaError> {
+        Ok(Self {
+            raw: unsafe {
+                driver::result::event::create(CUevent_flags_enum::CU_EVENT_BLOCKING_SYNC)?
+            },
+        })
+    }
+
+    pub fn record(&self, stream: &CudaStream) -> Result<(), CudaError> {
+        unsafe {
+            driver::result::event::record(self.raw, stream.raw())?;
+        }
+        Ok(())
+    }
+
+    pub fn wait(&self, stream: &CudaStream) -> Result<(), CudaError> {
+        unsafe {
+            driver::result::stream::wait_event(
+                stream.raw(),
+                self.raw,
+                CUevent_wait_flags_enum::CU_EVENT_WAIT_DEFAULT,
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn sync(&self) -> Result<(), CudaError> {
+        unsafe {
+            driver::sys::lib().cuEventSynchronize(self.raw).result()?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for CudaEvent {
+    fn drop(&mut self) {
+        unsafe {
+            driver::result::event::destroy(self.raw).expect("failed to destroy event");
+        }
+    }
+}

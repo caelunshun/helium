@@ -197,7 +197,7 @@ impl KernelBuilder {
             DataType::F32 => "float",
             DataType::U32 => "uint32_t",
             // Note: bitset packed
-            DataType::Bool => "uint8_t",
+            DataType::Bool => "uint32_t",
         }
     }
 }

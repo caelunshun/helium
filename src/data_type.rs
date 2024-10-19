@@ -141,7 +141,7 @@ pub enum DataVec {
     F16(Vec<f16>),
     U32(Vec<u32>),
     /// Packed as bitset
-    Bool(Vec<u8>),
+    Bool(Vec<u32>),
 }
 
 impl DataVec {
@@ -151,7 +151,17 @@ impl DataVec {
             DataVec::Bf16(v) => bytemuck::cast_slice(v),
             DataVec::F16(v) => bytemuck::cast_slice(v),
             DataVec::U32(v) => bytemuck::cast_slice(v),
-            DataVec::Bool(v) => v,
+            DataVec::Bool(v) => bytemuck::cast_slice(v),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            DataVec::F32(v) => v.len(),
+            DataVec::Bf16(v) => v.len(),
+            DataVec::F16(v) => v.len(),
+            DataVec::U32(v) => v.len(),
+            DataVec::Bool(v) => v.len() * (8 * size_of::<u32>()),
         }
     }
 
