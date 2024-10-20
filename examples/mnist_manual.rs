@@ -1,4 +1,4 @@
-use helium::{AdTensor, Device, Gradients, Param, Tensor};
+use helium::{Device, Gradients, Param, Tensor};
 use mnist::MnistBuilder;
 use rand::prelude::*;
 use rand_pcg::Pcg64Mcg;
@@ -18,7 +18,7 @@ impl Model {
         }
     }
 
-    pub fn forward(&self, mut x: AdTensor<2>) -> AdTensor<2> {
+    pub fn forward(&self, mut x: Tensor<2>) -> Tensor<2> {
         for (i, layer) in self.layers.iter().enumerate() {
             x = layer.forward(x);
             if i != self.layers.len() - 1 {
@@ -28,9 +28,9 @@ impl Model {
         x
     }
 
-    pub fn update_weights(&mut self, mut grads: Gradients, learning_rate: f32) {
+    pub fn update_weights(&mut self, grads: Gradients, learning_rate: f32) {
         for layer in &mut self.layers {
-            layer.update_weights(&mut grads, learning_rate);
+            layer.update_weights(&grads, learning_rate);
         }
     }
 }
@@ -53,16 +53,15 @@ impl Layer {
         }
     }
 
-    pub fn forward(&self, x: AdTensor<2>) -> AdTensor<2> {
+    pub fn forward(&self, x: Tensor<2>) -> Tensor<2> {
         let [batch_size, _] = x.shape();
         let [output_size] = self.bias.value().shape();
-        x.matmul(self.weights.clone().into())
-            + AdTensor::from(self.bias.clone()).broadcast_to([batch_size, output_size])
+        x.matmul(self.weights.value()) + self.bias.value().broadcast_to([batch_size, output_size])
     }
 
-    pub fn update_weights(&mut self, grads: &mut Gradients, learning_rate: f32) {
-        let weight_grad = grads.remove::<2>(self.weights.id());
-        let bias_grad = grads.remove::<1>(self.bias.id());
+    pub fn update_weights(&mut self, grads: &Gradients, learning_rate: f32) {
+        let weight_grad = grads.get::<2>(self.weights.id());
+        let bias_grad = grads.get::<1>(self.bias.id());
 
         self.weights
             .set_value(self.weights.value().clone() - weight_grad * learning_rate);
@@ -71,14 +70,14 @@ impl Layer {
     }
 }
 
-fn softmax(x: AdTensor<2>) -> AdTensor<2> {
+fn softmax(x: Tensor<2>) -> Tensor<2> {
     let x = x.exp();
     let denom = x.clone().reduce_sum::<2>(1).broadcast_to(x.shape());
     x / denom
 }
 
 #[expect(unused)]
-fn cross_entropy_loss(logits: AdTensor<2>, targets: AdTensor<2>) -> AdTensor<1> {
+fn cross_entropy_loss(logits: Tensor<2>, targets: Tensor<2>) -> Tensor<1> {
     ((softmax(logits) + 1e-6).log() * targets).reduce_mean::<1>(2) * -1.0
 }
 
@@ -158,8 +157,8 @@ fn main() {
                 .flat_map(|item| item.label_one_hot.as_slice())
                 .copied()
                 .collect();
-            let input = AdTensor::new(Tensor::<2>::from_vec(input, [batch_size, 28 * 28], device));
-            let labels = AdTensor::new(Tensor::<2>::from_vec(labels, [batch_size, 10], device));
+            let input = Tensor::<2>::from_vec(input, [batch_size, 28 * 28], device);
+            let labels = Tensor::<2>::from_vec(labels, [batch_size, 10], device);
 
             let logits = model.forward(input).sigmoid();
             let loss = (logits - labels).pow_scalar(2.0).reduce_mean::<1>(2);
@@ -167,7 +166,7 @@ fn main() {
             let grads = loss.clone().backward();
             model.update_weights(grads, lr);
 
-            let loss_scalar = loss.into_value().into_scalar::<f32>();
+            let loss_scalar = loss.to_scalar::<f32>();
             println!("Training batch loss: {loss_scalar:.3}");
         }
     }
@@ -185,11 +184,7 @@ fn main() {
         .collect();
     let inputs = Tensor::from_vec(inputs, [validation_items.len(), 28 * 28], device);
 
-    let outputs = model
-        .forward(inputs.into())
-        .sigmoid()
-        .into_value()
-        .into_vec::<f32>();
+    let outputs = model.forward(inputs.into()).sigmoid().to_vec::<f32>();
 
     let mut num_correct = 0;
     for (item, output) in validation_items.iter().zip(outputs.chunks_exact(10)) {

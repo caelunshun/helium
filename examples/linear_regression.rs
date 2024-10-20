@@ -1,4 +1,4 @@
-use helium::{AdTensor, Device, Param, Tensor};
+use helium::{Device, Param, Tensor};
 use rand::prelude::*;
 use rand_distr::Normal;
 use rand_pcg::Pcg64Mcg;
@@ -41,26 +41,21 @@ fn main() {
             let input: Vec<f32> = batch.iter().flat_map(|data| data.inputs).collect();
             let target: Vec<f32> = batch.iter().map(|data| data.output).collect();
 
-            let input = AdTensor::new(Tensor::<2>::from_vec(input, [batch_size, 8], device));
-            let target = AdTensor::new(Tensor::<2>::from_vec(target, [batch_size, 1], device));
+            let input = Tensor::<2>::from_vec(input, [batch_size, 8], device);
+            let target = Tensor::<2>::from_vec(target, [batch_size, 1], device);
 
-            let result = AdTensor::from(weights.clone())
-                .matmul(input.transpose())
-                .transpose();
+            let result = weights.value().matmul(input.transpose()).transpose();
             let loss = (result - target).pow_scalar(2.0).reduce_mean::<1>(2);
 
-            let mut grads = loss.clone().backward();
-            let grad = grads.remove::<2>(weights.id());
+            let grads = loss.clone().backward();
+            let grad = grads.get::<2>(weights.id());
             weights.set_value(weights.value().clone() - grad * 1e-5);
 
-            println!(
-                "Loss for this batch: {:.2}",
-                loss.into_value().into_scalar::<f32>()
-            );
+            println!("Loss for this batch: {:.2}", loss.to_scalar::<f32>());
         }
     }
 
-    let weights = weights.into_value().into_vec::<f32>();
+    let weights = weights.into_value().to_vec::<f32>();
     let weight_loss = weights
         .iter()
         .copied()

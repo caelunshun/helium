@@ -260,6 +260,21 @@ impl<const D: usize> Tensor<D, Float> {
         self.op(|x| x.exp(), |x, flow| x.exp() * flow)
     }
 
+    /// Natural logarithm.
+    pub fn log(&self) -> Self {
+        self.op(|x| x.log(), |x, flow| flow / x)
+    }
+
+    pub fn sigmoid(&self) -> Self {
+        self.op(
+            |x| x.sigmoid(),
+            |x, flow| {
+                let exp = (-x).exp();
+                exp.clone() / (exp + 1.0).pow_scalar(2.0) * flow
+            },
+        )
+    }
+
     pub fn pow(&self, power: impl AsTensor<D>) -> Self {
         self.op_binary(
             power.as_tensor(),
