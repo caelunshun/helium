@@ -89,6 +89,7 @@ impl BlockAllocator {
                 }
 
                 block.in_use_by_streams.extend(allocating_stream);
+
                 return Some(block);
             }
         }
@@ -215,6 +216,9 @@ impl BlockAllocator {
     pub fn end_stream(&mut self, id: StreamId) {
         let stream = self.streams.remove(id).expect("stream already ended");
         for block in stream.blocks_in_use {
+            if !self.free_blocks.contains_key(block) {
+                continue;
+            }
             let mut in_use_by_streams = mem::take(&mut self.free_blocks[block].in_use_by_streams);
             in_use_by_streams.remove(&id);
             let modified_block = Block {

@@ -136,6 +136,7 @@ impl CudaAllocator {
 
     fn allocate_page_for_at_least(&mut self, min_size: u64) -> Result<&Page, CudaError> {
         let size = min_size.max(Self::MIN_PAGE_SIZE).next_power_of_two();
+        tracing::info!("Allocating page of {}G", size / 1024 / 1024 / 1024);
 
         let ptr = unsafe { driver::result::malloc_sync(size.try_into().unwrap())? };
         unsafe {

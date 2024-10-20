@@ -186,9 +186,10 @@ fn main() {
             loss.async_start_eval();
             println!("Recorded in {:.2?}", start.elapsed());
 
-            loss_tx
-                .send(Box::pin(async move { loss.to_scalar_async::<f32>().await }))
-                .unwrap();
+            /*loss_tx
+            .send(Box::pin(async move { loss.to_scalar_async::<f32>().await }))
+            .unwrap();*/
+            println!("Training batch loss: {:.3}", loss.to_scalar::<f32>());
             println!("Latency: {:.2?}", prev.elapsed());
             prev = Instant::now();
         }

@@ -10,12 +10,8 @@ use crate::{
     opgraph::{op::Op, subgraph::OpSubgraph, NodeId, OpGraph},
 };
 use ahash::AHashSet;
-use cudarc::{
-    driver,
-    driver::sys::{CUevent, CUevent_flags_enum, CUevent_wait_flags_enum},
-};
 use instr::pointwise::PointwiseGraph;
-use std::sync::Arc;
+use std::{mem, sync::Arc};
 
 mod allocator;
 pub mod context;
@@ -131,13 +127,7 @@ impl Backend for Cuda {
         }
 
         let streams = cx.stream_pool().expect("failed to get stream pool");
-        let sync_events = streams
-            .iter()
-            .map(|_| {
-                driver::result::event::create(CUevent_flags_enum::CU_EVENT_DEFAULT)
-                    .expect("failed to create event")
-            })
-            .collect();
+        let sync_events = streams.iter().map(|_| CudaEvent::new().unwrap()).collect();
 
         let start = CudaEvent::new().expect("failed to create CUDA event");
         let stop = CudaEvent::new().expect("failed to create CUDA event");
@@ -164,7 +154,7 @@ impl Backend for Cuda {
 pub struct CudaExecutor {
     cx: &'static CudaContext,
     streams: &'static [CudaStream],
-    sync_events: Vec<CUevent>,
+    sync_events: Vec<CudaEvent>,
     hold_allocations: Vec<Memory>,
     instr_index: usize,
     allocation_stream: StreamId,
@@ -227,22 +217,12 @@ impl Executor<Cuda> for CudaExecutor {
     #[profiling::function]
     fn end_step(&mut self) {
         for (event, stream) in self.sync_events.iter().zip(self.streams) {
-            unsafe {
-                driver::result::event::record(*event, stream.raw())
-                    .expect("failed to record event");
-            }
+            event.record(stream).unwrap();
         }
         for (i, stream) in self.streams.iter().enumerate() {
             for (j, event) in self.sync_events.iter().enumerate() {
                 if i != j {
-                    unsafe {
-                        driver::result::stream::wait_event(
-                            stream.raw(),
-                            *event,
-                            CUevent_wait_flags_enum::CU_EVENT_WAIT_DEFAULT,
-                        )
-                        .expect("failed to wait on event");
-                    }
+                    event.wait(stream).unwrap();
                 }
             }
         }
@@ -262,15 +242,19 @@ impl Drop for CudaExecutor {
             tracing::debug!("GPU execution time: {time_elapsed:.2?}");
         }
 
-        for event in self.sync_events.drain(..) {
-            unsafe {
-                driver::result::event::destroy(event).expect("failed to destroy event");
-            }
-        }
         self.hold_allocations.clear();
         self.cx
             .set_previous_alloc_stream_for_thread(self.allocation_stream);
-        self.cx.allocator().end_stream(self.allocation_stream);
+
+        let cx = self.cx;
+        let allocation_stream = self.allocation_stream;
+        let sync_events = mem::take(&mut self.sync_events);
+        rayon::spawn(move || {
+            for event in sync_events {
+                event.sync().unwrap();
+            }
+            cx.allocator().end_stream(allocation_stream);
+        });
     }
 }
 

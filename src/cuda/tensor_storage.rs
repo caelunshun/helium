@@ -10,7 +10,6 @@ use cudarc::{driver, driver::sys::CUdeviceptr};
 use half::{bf16, f16};
 use std::{
     mem,
-    mem::MaybeUninit,
     sync::{atomic::AtomicU64, Arc},
 };
 
@@ -91,39 +90,39 @@ impl TensorStorage {
     pub unsafe fn async_copy_to_host(&self, stream: &CudaStream) -> Result<DataVec, CudaError> {
         match self.data_type {
             DataType::F16 => {
-                let mut data = vec![MaybeUninit::<f16>::uninit(); self.memory.len() as usize / 2];
+                let mut data = vec![f16::ZERO; self.memory.len() as usize / 2];
                 unsafe {
                     driver::result::memcpy_dtoh_async(&mut data, self.device_ptr(), stream.raw())?;
-                    Ok(DataVec::F16(mem::transmute(data)))
                 }
+                Ok(DataVec::F16(data))
             }
             DataType::Bf16 => {
-                let mut data = vec![MaybeUninit::<bf16>::uninit(); self.memory.len() as usize / 2];
+                let mut data = vec![bf16::ZERO; self.memory.len() as usize / 2];
                 unsafe {
                     driver::result::memcpy_dtoh_async(&mut data, self.device_ptr(), stream.raw())?;
-                    Ok(DataVec::Bf16(mem::transmute(data)))
                 }
+                Ok(DataVec::Bf16(data))
             }
             DataType::F32 => {
-                let mut data = vec![MaybeUninit::<f32>::uninit(); self.memory.len() as usize / 4];
+                let mut data = vec![0.0f32; self.memory.len() as usize / 4];
                 unsafe {
                     driver::result::memcpy_dtoh_async(&mut data, self.device_ptr(), stream.raw())?;
-                    Ok(DataVec::F32(mem::transmute(data)))
                 }
+                Ok(DataVec::F32(data))
             }
             DataType::U32 => {
-                let mut data = vec![MaybeUninit::<u32>::uninit(); self.memory.len() as usize / 4];
+                let mut data = vec![0u32; self.memory.len() as usize / 4];
                 unsafe {
                     driver::result::memcpy_dtoh_async(&mut data, self.device_ptr(), stream.raw())?;
-                    Ok(DataVec::U32(mem::transmute(data)))
                 }
+                Ok(DataVec::U32(data))
             }
             DataType::Bool => {
-                let mut data = vec![MaybeUninit::<u32>::uninit(); self.memory.len() as usize / 4];
+                let mut data = vec![0u32; self.memory.len() as usize / 4];
                 unsafe {
                     driver::result::memcpy_dtoh_async(&mut data, self.device_ptr(), stream.raw())?;
-                    Ok(DataVec::Bool(mem::transmute(data)))
                 }
+                Ok(DataVec::Bool(data))
             }
         }
     }

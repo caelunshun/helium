@@ -289,7 +289,7 @@ impl TensorDescriptor {
         desc.set_attribute_slice(CUDNN_ATTR_TENSOR_STRIDES, compute_strides(shape).as_slice())?;
         desc.set_attribute(CUDNN_ATTR_TENSOR_UNIQUE_ID, id.0)?;
         desc.set_attribute(CUDNN_ATTR_TENSOR_DATA_TYPE, convert_data_type(data_type))?;
-        desc.set_attribute(CUDNN_ATTR_TENSOR_BYTE_ALIGNMENT, 16u64)?;
+        desc.set_attribute(CUDNN_ATTR_TENSOR_BYTE_ALIGNMENT, 64u64)?;
 
         if kind == TensorKind::Virtual {
             desc.set_attribute(CUDNN_ATTR_TENSOR_IS_VIRTUAL, true)?;
