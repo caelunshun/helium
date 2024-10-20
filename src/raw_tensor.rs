@@ -5,7 +5,7 @@ use crate::{
     opgraph::{
         op,
         op::{
-            BinaryPointwise, BinaryPointwiseOp, BroadcastAxis, Op, Reduce, ReduceOp,
+            BinaryPointwise, BinaryPointwiseOp, BroadcastAxis, CompareOp, Op, Reduce, ReduceOp,
             UnaryPointwise, UnaryPointwiseOp,
         },
         Descriptor, NodeId, OpGraph,
@@ -311,6 +311,89 @@ impl RawTensor {
 
     pub fn relu(self) -> Self {
         self.op_unary_pointwise(UnaryPointwiseOp::Relu)
+    }
+
+    pub fn to_data_type(self, dtype: DataType) -> Self {
+        if dtype == self.data_type() {
+            return self;
+        }
+
+        let (cx, this) = self.make_graph();
+        Self::from_op(
+            &cx,
+            Op::ChangeDataType(op::ChangeDataType {
+                input: this,
+                target_type: dtype,
+            }),
+        )
+    }
+
+    fn compare_op(self, rhs: Self, op: CompareOp) -> Self {
+        assert_eq!(
+            self.shape(),
+            rhs.shape(),
+            "mismatched shape for compare op {op:?}"
+        );
+        assert_eq!(
+            self.data_type().class(),
+            rhs.data_type().class(),
+            "mismatched data class for compare op {op:?}"
+        );
+        let (cx, this) = self.make_graph();
+        let rhs = rhs.to_graph(&cx);
+        Self::from_op(&cx, Op::Compare(op::Compare { op, lhs: this, rhs }))
+    }
+
+    pub fn compare_equal(self, rhs: Self) -> Self {
+        self.compare_op(rhs, CompareOp::Equal)
+    }
+
+    pub fn compare_not_equal(self, rhs: Self) -> Self {
+        self.compare_op(rhs, CompareOp::NotEqual)
+    }
+
+    pub fn compare_less_than(self, rhs: Self) -> Self {
+        self.compare_op(rhs, CompareOp::LessThan)
+    }
+
+    pub fn compare_less_than_or_equal(self, rhs: Self) -> Self {
+        self.compare_op(rhs, CompareOp::LessThanOrEqual)
+    }
+
+    pub fn compare_greater_than(self, rhs: Self) -> Self {
+        self.compare_op(rhs, CompareOp::GreaterThan)
+    }
+
+    pub fn compare_greater_than_or_equal(self, rhs: Self) -> Self {
+        self.compare_op(rhs, CompareOp::GreaterThanOrEqual)
+    }
+
+    pub fn select(self, true_case: Self, false_case: Self) -> Self {
+        assert_eq!(self.data_type(), DataType::Bool);
+        assert_eq!(
+            true_case.shape(),
+            false_case.shape(),
+            "shape mismatch for select"
+        );
+        assert_eq!(self.shape(), true_case.shape(), "shape mismatch for select");
+        assert_eq!(
+            true_case.data_type().class(),
+            false_case.data_type().class(),
+            "data class mismatch for select"
+        );
+
+        let (cx, this) = self.make_graph();
+        let true_case = true_case.to_graph(&cx);
+        let false_case = false_case.to_graph(&cx);
+
+        Self::from_op(
+            &cx,
+            Op::Select(op::Select {
+                lhs: false_case,
+                rhs: true_case,
+                selector: this,
+            }),
+        )
     }
 
     /// Performs sum reduction along the last `depth` dimensions

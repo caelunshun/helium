@@ -2,7 +2,7 @@ use crate::{
     data_type::{DataClassTrait, DataTypeConversion, Float},
     raw_tensor::RawTensor,
     tensor::tape::Tape,
-    Device, Gradients, Param,
+    DataType, Device, Gradients, Param,
 };
 use ahash::AHashMap;
 use pollster::FutureExt;
@@ -342,6 +342,66 @@ impl<const D: usize> Tensor<D, Float> {
                 let mut new_shape = [1usize; D];
                 new_shape[..D2].copy_from_slice(result_shape.dims());
                 flow.reshape(new_shape).broadcast_to(shape) * (stride as f32).recip()
+            },
+        )
+    }
+
+    pub fn reduce_min<const D2: usize>(&self, depth: u32) -> Tensor<D2> {
+        let shape = self.shape();
+        self.op(
+            move |x| x.reduce_min(depth),
+            move |x, flow| {
+                let mut temp_shape = [1usize; D];
+                temp_shape[..D2].copy_from_slice(flow.shape().dims());
+
+                let min = x
+                    .clone()
+                    .reduce_min(depth)
+                    .reshape(temp_shape)
+                    .broadcast_to(shape);
+
+                let match_mask = min.compare_equal(x.clone());
+                let num_matching = match_mask
+                    .clone()
+                    .to_data_type(DataType::F16)
+                    .reduce_sum(depth)
+                    .reshape(temp_shape)
+                    .broadcast_to(shape);
+
+                match_mask.select(
+                    num_matching.recip(),
+                    RawTensor::from_float(0.0, x.device()).broadcast_to(shape),
+                ) * flow.reshape(temp_shape).broadcast_to(shape)
+            },
+        )
+    }
+
+    pub fn reduce_max<const D2: usize>(&self, depth: u32) -> Tensor<D2> {
+        let shape = self.shape();
+        self.op(
+            move |x| x.reduce_max(depth),
+            move |x, flow| {
+                let mut temp_shape = [1usize; D];
+                temp_shape[..D2].copy_from_slice(flow.shape().dims());
+
+                let min = x
+                    .clone()
+                    .reduce_max(depth)
+                    .reshape(temp_shape)
+                    .broadcast_to(shape);
+
+                let match_mask = min.compare_equal(x.clone());
+                let num_matching = match_mask
+                    .clone()
+                    .to_data_type(DataType::F16)
+                    .reduce_sum(depth)
+                    .reshape(temp_shape)
+                    .broadcast_to(shape);
+
+                match_mask.select(
+                    num_matching.recip(),
+                    RawTensor::from_float(0.0, x.device()).broadcast_to(shape),
+                ) * flow.reshape(temp_shape).broadcast_to(shape)
             },
         )
     }

@@ -75,6 +75,44 @@ fn broadcast() {
 }
 
 #[test]
+fn reduce_min() {
+    // Gradient should be evenly distributed among all elements
+    // that equal the minimum.
+    let param = Param::new(Tensor::<1>::from_array([1.0; 6], DEVICE));
+
+    let x = Tensor::<1>::from_array([0.5, 2.0, 3.0, 3.0, 2.0, 0.5], DEVICE);
+
+    let y = (param.value().broadcast_to(x.shape()) * x).reduce_min::<1>(1);
+
+    let grads = y.backward();
+    let grad = grads.get::<1>(param.id());
+
+    assert_ulps_eq!(
+        grad.to_vec::<f32>().as_slice(),
+        &[0.25, 0.0, 0.0, 0.0, 0.0, 0.25][..]
+    );
+}
+
+#[test]
+fn reduce_max() {
+    // Gradient should be evenly distributed among all elements
+    // that equal the maximum.
+    let param = Param::new(Tensor::<1>::from_array([1.0; 6], DEVICE));
+
+    let x = Tensor::<1>::from_array([0.5, 2.0, 3.0, 3.0, 2.0, 0.5], DEVICE);
+
+    let y = (param.value().broadcast_to(x.shape()) * x).reduce_max::<1>(1);
+
+    let grads = y.backward();
+    let grad = grads.get::<1>(param.id());
+
+    assert_ulps_eq!(
+        grad.to_vec::<f32>().as_slice(),
+        &[0.0, 0.0, 1.5, 1.5, 0.0, 0.0][..]
+    );
+}
+
+#[test]
 fn basic_gradient_descent() {
     // Use gradient descent to converge a parameter onto sqrt(X)
     const X: f32 = 1001.0;

@@ -108,9 +108,9 @@ pub fn generate_kernel(subgraph: &OpSubgraph) -> KernelBuilder {
                 DataClass::Bool => {
                     kernel.statement(formatdoc! {"
                     if ({val}) {{
-                        atomicOr({param} + out_index / 32, 1 << (out_index % 32)));
+                        atomicOr({param} + out_index / 32, 1 << (out_index % 32));
                     }} else {{
-                        atomicAnd({param} + out_index / 32, !(1 << (out_index % 32)));
+                        atomicAnd({param} + out_index / 32, ~(1 << (out_index % 32)));
                     }}
                     "});
                 }
@@ -234,7 +234,7 @@ fn compute_node_output(
             }
             DataClass::Bool => {
                 kernel.statement(format!(
-                    "bool {ident} = ({array}[{index} / 32] >> ({index} % 32)) & 1 != 0;"
+                    "bool {ident} = (({array}[{index} / 32] >> ({index} % 32)) & 1) != 0;"
                 ));
             }
         }
