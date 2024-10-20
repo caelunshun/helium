@@ -72,17 +72,18 @@ impl Layer {
     }
 }
 
-fn softmax(x: Tensor<2>) -> Tensor<2> {
+fn log_softmax(x: Tensor<2>) -> Tensor<2> {
     let max = x.reduce_max::<2>(1).broadcast_to(x.shape());
-
-    let x = (x - max).exp();
-
-    let denom = x.clone().reduce_sum::<2>(1).broadcast_to(x.shape());
-    x / denom
+    &x - &max
+        - (&x - max)
+            .exp()
+            .reduce_sum::<2>(1)
+            .log()
+            .broadcast_to(x.shape())
 }
 
 fn cross_entropy_loss(logits: Tensor<2>, targets: Tensor<2>) -> Tensor<1> {
-    -((softmax(logits) + 1e-6).log() * targets).reduce_mean::<1>(2)
+    -(log_softmax(logits) * targets).reduce_mean::<1>(2)
 }
 
 fn init_zeros(len: usize, device: Device) -> Tensor<1> {
@@ -202,7 +203,7 @@ fn main() {
         .collect();
     let inputs = Tensor::from_vec(inputs, [validation_items.len(), 28 * 28], device);
 
-    let outputs = softmax(model.forward(inputs)).to_vec::<f32>();
+    let outputs = log_softmax(model.forward(inputs)).exp().to_vec::<f32>();
 
     let mut num_correct = 0;
     for (item, output) in validation_items.iter().zip(outputs.chunks_exact(10)) {

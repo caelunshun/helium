@@ -55,6 +55,9 @@ impl Instruction<Cuda> for Instr {
             (Instr::CudnnGraph(instr1), Instr::CudnnGraph(instr2)) => {
                 instr1.can_fuse_with(instr2, op_graph)
             }
+            (Instr::PointwiseGraph(instr1), Instr::PointwiseGraph(instr2)) => {
+                instr1.can_fuse_with(instr2, op_graph)
+            }
             _ => false,
         }
     }
@@ -63,6 +66,9 @@ impl Instruction<Cuda> for Instr {
         match (self, next) {
             (Instr::CudnnGraph(instr1), Instr::CudnnGraph(instr2)) => {
                 Instr::CudnnGraph(instr1.fuse_with(instr2, op_graph))
+            }
+            (Instr::PointwiseGraph(instr1), Instr::PointwiseGraph(instr2)) => {
+                Instr::PointwiseGraph(instr1.fuse_with(instr2, op_graph))
             }
             _ => unreachable!("can_fuse_with() is false"),
         }

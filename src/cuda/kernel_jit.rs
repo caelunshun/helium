@@ -120,14 +120,16 @@ impl KernelBuilder {
         let items = items.join("\n");
         let params = param_declarations.join(", ");
         let statements = statements.join("\n");
-        formatdoc! {"
+        let k = formatdoc! {"
             {includes}
             {items}
 
             extern \"C\" __global__ void {kernel_name}({params}) {{
                 {statements}
             }}
-        "}
+        "};
+        //println!("{k}");
+        k
     }
 
     /// Compiles a PTX kernel targeting the given device.

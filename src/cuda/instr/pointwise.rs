@@ -88,12 +88,14 @@ impl Instruction<Cuda> for PointwiseGraph {
         self.subgraph.leafs().collect()
     }
 
-    fn can_fuse_with(&self, _next: &Self, _op_graph: &Arc<OpGraph>) -> bool {
-        todo!()
+    fn can_fuse_with(&self, next: &Self, _op_graph: &Arc<OpGraph>) -> bool {
+        let graph = self.subgraph.merge_with(&next.subgraph);
+        supports_subgraph(&graph)
     }
 
-    fn fuse_with(&self, _next: &Self, _op_graph: &Arc<OpGraph>) -> Self {
-        todo!()
+    fn fuse_with(&self, next: &Self, _op_graph: &Arc<OpGraph>) -> Self {
+        let subgraph = self.subgraph.merge_with(&next.subgraph);
+        Self { subgraph }
     }
 
     fn perf(&self) -> InstrPerf {
@@ -107,4 +109,59 @@ fn initial_reduction_val(op: ReduceOp) -> f32 {
         ReduceOp::Max => f32::NEG_INFINITY,
         ReduceOp::Min => f32::INFINITY,
     }
+}
+
+fn supports_subgraph(subgraph: &OpSubgraph) -> bool {
+    let mut output_size = None;
+    let mut reduction_shape = None;
+
+    for node in subgraph.nodes() {
+        let Node::Intermediate(Intermediate { op, descriptor }) = subgraph.graph().get(node) else {
+            unreachable!("node must be intermediate")
+        };
+
+        if !matches!(op, Op::Reduce(_)) && subgraph.leafs().any(|l| l == node) {
+            match output_size {
+                None => output_size = Some(descriptor.shape.num_elements()),
+                Some(output_size) => {
+                    if output_size != descriptor.shape.num_elements() {
+                        // All output sizes must match
+                        return false;
+                    }
+                }
+            }
+        }
+
+        match op {
+            Op::Select(_)
+            | Op::Reshape(_)
+            | Op::Compare(_)
+            | Op::UnaryPointwise(_)
+            | Op::BinaryPointwise(_)
+            | Op::ChangeDataType(_)
+            | Op::Broadcast(_)
+            | Op::SwapDims(_) => continue,
+            Op::Reduce(op) => {
+                if !subgraph.leafs().any(|l| l == node) {
+                    // Reduction must be output
+                    return false;
+                }
+
+                let input_shape = &subgraph.graph().get(op.input).descriptor().shape;
+
+                match &reduction_shape {
+                    None => reduction_shape = Some((input_shape.clone(), op.depth)),
+                    Some((shape, depth)) => {
+                        if shape != input_shape || op.depth != *depth {
+                            // All reduction shapes + depths must be equal
+                            return false;
+                        }
+                    }
+                }
+            }
+            _ => return false, // unsupported op
+        }
+    }
+
+    true
 }

@@ -115,7 +115,6 @@ fn reduce_mean() {
     assert_ulps_eq!(mean_dim1.to_vec::<f32>().as_slice(), &[10.0f32; 25][..]);
 }
 
-/*
 #[test]
 fn reduce_max() {
     let x: Tensor<2> = Tensor::from_vec(
@@ -150,7 +149,6 @@ fn reduce_min() {
     assert_ulps_eq!(min_all.to_scalar::<f32>(), 1.0);
     assert_ulps_eq!(min_dim1.to_vec::<f32>().as_slice(), &[1.0, 5.0, 9.0][..]);
 }
- */
 
 #[test]
 fn reduce_large() {

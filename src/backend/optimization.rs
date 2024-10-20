@@ -3,10 +3,11 @@ use crate::{
     opgraph::{Node, NodeId, OpGraph},
 };
 use slotmap::{SecondaryMap, SlotMap};
-use std::{mem, sync::Arc};
+use std::{collections::BTreeSet, mem, sync::Arc};
 
 pub fn generate_plan<B: Backend>(op_graph: &Arc<OpGraph>, backend: &B) -> Plan<B> {
-    let graph = make_instr_graph(op_graph, backend);
+    let mut graph = make_instr_graph(op_graph, backend);
+    do_fusions(&mut graph, op_graph);
     generate_plan_from_graph(graph, op_graph)
 }
 
@@ -104,27 +105,63 @@ impl<B: Backend> InstrGraph<B> {
         })
     }
 
+    pub fn can_fuse_instrs(&self, a: InstrNodeId, b: InstrNodeId, op_graph: &Arc<OpGraph>) -> bool {
+        self.instrs[a].can_fuse_with(&self.instrs[b], op_graph) && self.num_paths(a, b) == 1
+    }
+
+    fn num_paths(&self, a: InstrNodeId, b: InstrNodeId) -> usize {
+        let mut count = 0;
+        let mut stack = vec![a];
+        while let Some(current) = stack.pop() {
+            if current == b {
+                count += 1;
+            } else {
+                stack.extend(self.instr_dependents(current));
+            }
+        }
+        count
+    }
+
     /// Fuses two instructions. `b` must depend on `a`.
     ///
     /// If no other instruction depends on `a`, then `a`
     /// is removed from the graph and fully merged into `b`.
     /// Otherwise, a duplicate of `a` is kept in the graph.
-    #[expect(unused)]
     pub fn fuse_instrs(&mut self, a: InstrNodeId, b: InstrNodeId, op_graph: &Arc<OpGraph>) {
         debug_assert!(self.instr_dependents(a).any(|x| x == b));
         debug_assert!(self.instr_dependencies(b).any(|x| x == a));
         debug_assert!(self.get(a).can_fuse_with(self.get(b), op_graph));
 
         let new_instr = self.get(a).fuse_with(self.get(b), op_graph);
+        self.remove(a);
         self.instrs[b] = new_instr;
-        if self.instr_dependents(a).count() == 1 {
-            self.remove(a);
-        }
     }
 }
 
 slotmap::new_key_type! {
      struct InstrNodeId;
+}
+
+fn do_fusions<B: Backend>(graph: &mut InstrGraph<B>, op_graph: &Arc<OpGraph>) {
+    let mut working_set: BTreeSet<InstrNodeId> = graph.instrs.keys().collect();
+
+    while let Some(current) = working_set.first().copied() {
+        let mut did_fuse = false;
+        for next in graph.instr_dependents(current).collect::<Vec<_>>() {
+            if graph.can_fuse_instrs(current, next, op_graph) {
+                graph.fuse_instrs(current, next, op_graph);
+                if !graph.instrs.contains_key(current) {
+                    working_set.remove(&current);
+                }
+                did_fuse = true;
+                break;
+            }
+        }
+
+        if !did_fuse {
+            working_set.remove(&current);
+        }
+    }
 }
 
 fn make_instr_graph<B: Backend>(op_graph: &Arc<OpGraph>, backend: &B) -> InstrGraph<B> {

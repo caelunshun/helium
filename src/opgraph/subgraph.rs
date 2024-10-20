@@ -1,11 +1,12 @@
 use crate::opgraph::{NodeId, OpGraph};
 use std::{
+    fmt::{Debug, Formatter},
     hash::{Hash, Hasher},
     sync::Arc,
 };
 
 /// Subset of an `OpGraph`.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct OpSubgraph {
     graph: Arc<OpGraph>,
     nodes: Vec<NodeId>,
@@ -35,6 +36,19 @@ impl OpSubgraph {
             graph: Arc::clone(graph),
             inputs,
         }
+    }
+
+    pub fn merge_with(&self, other: &Self) -> Self {
+        assert!(Arc::ptr_eq(&self.graph, &other.graph));
+        let mut nodes = self
+            .nodes
+            .iter()
+            .copied()
+            .chain(other.nodes.iter().copied())
+            .collect::<Vec<_>>();
+        nodes.sort_unstable();
+        nodes.dedup();
+        Self::from_nodes(&self.graph, nodes)
     }
 
     pub fn nodes(&self) -> impl Iterator<Item = NodeId> + '_ {
@@ -104,5 +118,18 @@ impl Hash for OpSubgraph {
         for node in &self.nodes {
             self.graph.get(*node).descriptor().hash(state);
         }
+    }
+}
+
+impl Debug for OpSubgraph {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut f = f.debug_list();
+
+        for &node_id in &self.nodes {
+            let node = self.graph.get(node_id);
+            f.entry(&(node_id, node));
+        }
+
+        f.finish()
     }
 }

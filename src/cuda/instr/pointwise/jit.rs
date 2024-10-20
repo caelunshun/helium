@@ -260,7 +260,7 @@ fn compute_node_output(
                     axis_b: *axis_b,
                 }),
             };
-            return compute_node_output(
+            let res = compute_node_output(
                 subgraph,
                 &Position {
                     node: *input,
@@ -269,6 +269,8 @@ fn compute_node_output(
                 kernel,
                 cx,
             );
+            cx.results_at_position.insert(position.clone(), res.clone());
+            return res;
         }
         Op::Broadcast(broadcast) => {
             let in_shape = subgraph
@@ -284,7 +286,7 @@ fn compute_node_output(
                     in_shape,
                 }),
             };
-            return compute_node_output(
+            let res = compute_node_output(
                 subgraph,
                 &Position {
                     node: broadcast.input,
@@ -293,6 +295,8 @@ fn compute_node_output(
                 kernel,
                 cx,
             );
+            cx.results_at_position.insert(position.clone(), res.clone());
+            return res;
         }
         Op::UnaryPointwise(op::UnaryPointwise { input, op }) => {
             let input = compute_node_output(
