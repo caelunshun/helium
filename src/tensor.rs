@@ -58,6 +58,14 @@ impl<const D: usize, C: DataClassTrait> Tensor<D, C> {
     }
 
     pub fn broadcast_to<const D2: usize>(&self, new_shape: [usize; D2]) -> Tensor<D2, C> {
+        if &self.shape()[..] == &new_shape[..] {
+            return Tensor {
+                raw: self.raw.clone(),
+                tape: self.tape.clone(),
+                _class: PhantomData,
+            };
+        }
+
         let old_shape = self.shape();
 
         let mut broadcast_axes = Vec::new();
@@ -246,6 +254,39 @@ impl Tensor<4, Float> {
 impl<const D: usize> Tensor<D, Float> {
     pub fn recip(&self) -> Self {
         self.op(|x| x.recip(), |x, flow| -(x.pow_scalar(-2.0)) * flow)
+    }
+
+    pub fn exp(&self) -> Self {
+        self.op(|x| x.exp(), |x, flow| x.exp() * flow)
+    }
+
+    pub fn pow(&self, power: impl AsTensor<D>) -> Self {
+        self.op_binary(
+            power.as_tensor(),
+            |a, b| a.pow(b),
+            |a, b, flow| b.clone() * a.pow(b - 1.0) * flow,
+            |a, b, flow| a.clone().pow(b) * a.log() * flow,
+        )
+    }
+
+    pub fn pow_scalar(&self, power: f32) -> Self {
+        self.pow(Tensor::<1>::from_scalar(power, self.device()).broadcast_to(self.shape()))
+    }
+
+    pub fn sqrt(&self) -> Self {
+        self.op(|x| x.sqrt(), |x, flow| flow / (x.sqrt() * 2.0))
+    }
+
+    pub fn sin(&self) -> Self {
+        self.op(|x| x.sin(), |x, flow| flow * x.cos())
+    }
+
+    pub fn cos(&self) -> Self {
+        self.op(|x| x.cos(), |x, flow| flow * -x.sin())
+    }
+
+    pub fn tan(&self) -> Self {
+        self.op(|x| x.tan(), |x, flow| flow / (x.cos().pow_scalar(2.0)))
     }
 
     /// Row-major matrix multiplication: `self * rhs`.
@@ -484,7 +525,7 @@ impl<const D: usize, C: DataClassTrait> Tensor<D, C> {
             let rhs_tape = rhs
                 .tape
                 .clone()
-                .unwrap_or_else(|| Tape::new_constant(self.raw.clone()));
+                .unwrap_or_else(|| Tape::new_constant(rhs.raw.clone()));
             Some(lhs_tape.append_binary(
                 rhs_tape,
                 compute,

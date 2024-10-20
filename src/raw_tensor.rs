@@ -111,18 +111,6 @@ impl RawTensor {
         fut
     }
 
-    /// # Panics
-    /// Panics if the tensor does not have a length of exactly 1.
-    pub async fn into_float<T: DataTypeConversion<Float>>(self) -> T {
-        assert_eq!(
-            self.shape().num_elements(),
-            1,
-            "Tensor::into_scalar called on tensor of length != 1"
-        );
-        let vec = self.into_vec().await;
-        vec.to_floats::<T>()[0]
-    }
-
     pub fn device(&self) -> Device {
         self.device
     }

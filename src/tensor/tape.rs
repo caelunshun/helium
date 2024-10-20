@@ -14,7 +14,7 @@ impl Tape {
         let position = Position::new();
         Self {
             position,
-            backprop: Arc::new(EmptyBackprop { activation }),
+            backprop: Arc::new(ConstantBackprop { activation }),
         }
     }
 
@@ -83,11 +83,11 @@ trait Backprop: Send + Sync + 'static {
     fn backprop(&self, gradients: &mut Gradients, flow: RawTensor);
 }
 
-struct EmptyBackprop {
+struct ConstantBackprop {
     activation: RawTensor,
 }
 
-impl Backprop for EmptyBackprop {
+impl Backprop for ConstantBackprop {
     fn activation(&self) -> RawTensor {
         self.activation.clone()
     }
