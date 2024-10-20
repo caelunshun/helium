@@ -7,6 +7,7 @@ expression: "kernel.build_source(\"test\")"
 #include <vector_types.h>
 
 typedef unsigned int uint32_t;
+typedef unsigned char uint8_t;
 
 struct alignas(8) __nv_bfloat164 {
     __nv_bfloat16 x;
