@@ -2,13 +2,59 @@ use crate::{
     backend::{Backend, Instruction},
     opgraph::{Node, NodeId, OpGraph},
 };
+use lru::LruCache;
+use parking_lot::Mutex;
 use slotmap::{SecondaryMap, SlotMap};
-use std::{collections::BTreeSet, mem, sync::Arc};
+use std::{
+    any::{Any, TypeId},
+    collections::BTreeSet,
+    mem,
+    num::NonZeroUsize,
+    sync::{Arc, OnceLock},
+};
 
-pub fn generate_plan<B: Backend>(op_graph: &Arc<OpGraph>, backend: &B) -> Plan<B> {
+pub fn generate_cached_plan<B: Backend>(op_graph: &Arc<OpGraph>, backend: &B) -> Plan<B> {
+    static CACHE: OnceLock<Mutex<PlanCache>> = OnceLock::new();
+
+    CACHE
+        .get_or_init(Default::default)
+        .lock()
+        .get_or_insert(op_graph, backend)
+}
+
+fn generate_plan<B: Backend>(op_graph: &Arc<OpGraph>, backend: &B) -> Plan<B> {
     let mut graph = make_instr_graph(op_graph, backend);
     do_fusions(&mut graph, op_graph);
     generate_plan_from_graph(graph, op_graph)
+}
+
+/// Caches plans by backend type ID + op graph.
+struct PlanCache {
+    cache: LruCache<(Arc<OpGraph>, TypeId), Box<dyn Any + Send + Sync>, ahash::RandomState>,
+}
+
+impl Default for PlanCache {
+    fn default() -> Self {
+        static CAPACITY: usize = 256;
+        Self {
+            cache: LruCache::with_hasher(
+                NonZeroUsize::new(CAPACITY).unwrap(),
+                ahash::RandomState::new(),
+            ),
+        }
+    }
+}
+
+impl PlanCache {
+    pub fn get_or_insert<B: Backend>(&mut self, graph: &Arc<OpGraph>, backend: &B) -> Plan<B> {
+        self.cache
+            .get_or_insert((graph.clone(), TypeId::of::<B>()), || {
+                Box::new(generate_plan(graph, backend))
+            })
+            .downcast_ref::<Plan<B>>()
+            .unwrap()
+            .clone()
+    }
 }
 
 /// Output of the optimization engine.
@@ -18,7 +64,7 @@ pub fn generate_plan<B: Backend>(op_graph: &Arc<OpGraph>, backend: &B) -> Plan<B
 /// concurrently. A step begins executing only
 /// after all instructions in the previous step
 /// have completed.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Plan<B: Backend> {
     steps: Vec<Step<B>>,
 }
@@ -29,7 +75,7 @@ impl<B: Backend> Plan<B> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Step<B: Backend> {
     instrs: Vec<B::Instr>,
     tensors_to_release: Vec<NodeId>,

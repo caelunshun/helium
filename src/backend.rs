@@ -9,9 +9,9 @@ use std::{fmt::Debug, sync::Arc};
 mod optimization;
 
 /// Trait for backends implementing tensor ops.
-pub trait Backend: Copy + Sized + Debug {
+pub trait Backend: Copy + Sized + Debug + Send + Sync + 'static {
     type Device: Copy + Debug;
-    type Instr: Instruction<Self> + Debug;
+    type Instr: Instruction<Self> + Debug + Clone + Send + Sync;
     type TensorStorage: Clone;
     type Executor: Executor<Self>;
 
@@ -40,7 +40,7 @@ pub trait BackendExt: Backend {
     ) -> SecondaryMap<NodeId, Self::TensorStorage> {
         graph.optimize();
         let graph = Arc::new(graph);
-        let plan = optimization::generate_plan(&graph, self);
+        let plan = optimization::generate_cached_plan(&graph, self);
 
         let mut tensors = TensorMap::new(&graph, inputs);
 

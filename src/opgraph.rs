@@ -1,6 +1,9 @@
 use crate::{data_type::DataType, opgraph::op::Op, shape::Shape};
 use slotmap::{SecondaryMap, SlotMap};
-use std::fmt::{Debug, Formatter};
+use std::{
+    fmt::{Debug, Formatter},
+    hash::{Hash, Hasher},
+};
 
 pub mod op;
 pub mod subgraph;
@@ -193,6 +196,27 @@ impl Debug for OpGraph {
         }
 
         f.finish()
+    }
+}
+
+impl PartialEq for OpGraph {
+    fn eq(&self, other: &Self) -> bool {
+        self.nodes.len() == other.nodes.len()
+            && self
+                .nodes
+                .iter()
+                .zip(other.nodes.iter())
+                .all(|(a, b)| a == b)
+    }
+}
+
+impl Eq for OpGraph {}
+
+impl Hash for OpGraph {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        for (id, node) in &self.nodes {
+            (id, node).hash(state);
+        }
     }
 }
 
