@@ -363,7 +363,7 @@ impl<const D: usize> Tensor<D, Float> {
                 let match_mask = min.compare_equal(x.clone());
                 let num_matching = match_mask
                     .clone()
-                    .to_data_type(DataType::F16)
+                    .into_data_type(DataType::F16)
                     .reduce_sum(depth)
                     .reshape(temp_shape)
                     .broadcast_to(shape);
@@ -393,7 +393,7 @@ impl<const D: usize> Tensor<D, Float> {
                 let match_mask = min.compare_equal(x.clone());
                 let num_matching = match_mask
                     .clone()
-                    .to_data_type(DataType::F16)
+                    .into_data_type(DataType::F16)
                     .reduce_sum(depth)
                     .reshape(temp_shape)
                     .broadcast_to(shape);

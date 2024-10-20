@@ -19,6 +19,7 @@ impl Gradients {
     }
 
     pub(crate) fn insert_raw(&mut self, param: ParamId, grad: RawTensor) {
+        assert!(!self.grads.contains_key(&param));
         self.grads.insert(param, grad);
     }
 

@@ -71,14 +71,16 @@ impl Layer {
 }
 
 fn softmax(x: Tensor<2>) -> Tensor<2> {
-    let x = x.exp();
+    let max = x.reduce_max::<2>(1).broadcast_to(x.shape());
+
+    let x = (x - max).exp();
+
     let denom = x.clone().reduce_sum::<2>(1).broadcast_to(x.shape());
     x / denom
 }
 
-#[expect(unused)]
 fn cross_entropy_loss(logits: Tensor<2>, targets: Tensor<2>) -> Tensor<1> {
-    ((softmax(logits) + 1e-6).log() * targets).reduce_mean::<1>(2) * -1.0
+    -((softmax(logits) + 1e-6).log() * targets).reduce_mean::<1>(2)
 }
 
 fn init_zeros(len: usize, device: Device) -> Tensor<1> {
@@ -140,7 +142,7 @@ fn main() {
         .collect();
 
     let num_epochs = 10;
-    let lr = 1e-2;
+    let lr = 1e1;
     let batch_size = 1024;
 
     for _epoch in 0..num_epochs {
@@ -160,8 +162,9 @@ fn main() {
             let input = Tensor::<2>::from_vec(input, [batch_size, 28 * 28], device);
             let labels = Tensor::<2>::from_vec(labels, [batch_size, 10], device);
 
-            let logits = model.forward(input).sigmoid();
-            let loss = (logits - labels).pow_scalar(2.0).reduce_mean::<1>(2);
+            let logits = model.forward(input);
+            //let loss = (logits - labels).pow_scalar(2.0).reduce_mean::<1>(2);
+            let loss = cross_entropy_loss(logits, labels);
 
             let grads = loss.clone().backward();
             model.update_weights(grads, lr);
@@ -177,14 +180,9 @@ fn main() {
         .flat_map(|item| item.image.as_slice())
         .copied()
         .collect();
-    let labels: Vec<f32> = validation_items
-        .iter()
-        .flat_map(|item| item.label_one_hot.as_slice())
-        .copied()
-        .collect();
     let inputs = Tensor::from_vec(inputs, [validation_items.len(), 28 * 28], device);
 
-    let outputs = model.forward(inputs.into()).sigmoid().to_vec::<f32>();
+    let outputs = softmax(model.forward(inputs)).to_vec::<f32>();
 
     let mut num_correct = 0;
     for (item, output) in validation_items.iter().zip(outputs.chunks_exact(10)) {

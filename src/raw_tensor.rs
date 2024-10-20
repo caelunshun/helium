@@ -237,7 +237,7 @@ impl RawTensor {
             .iter()
             .copied()
             .rev()
-            .zip(new_shape.dims().into_iter().rev())
+            .zip(new_shape.dims().iter().rev())
             .enumerate()
         {
             let index = d2 - reverse_index - 1;
@@ -309,11 +309,12 @@ impl RawTensor {
         self.op_unary_pointwise(UnaryPointwiseOp::Sigmoid)
     }
 
+    #[expect(unused)]
     pub fn relu(self) -> Self {
         self.op_unary_pointwise(UnaryPointwiseOp::Relu)
     }
 
-    pub fn to_data_type(self, dtype: DataType) -> Self {
+    pub fn into_data_type(self, dtype: DataType) -> Self {
         if dtype == self.data_type() {
             return self;
         }
@@ -348,22 +349,27 @@ impl RawTensor {
         self.compare_op(rhs, CompareOp::Equal)
     }
 
+    #[expect(unused)]
     pub fn compare_not_equal(self, rhs: Self) -> Self {
         self.compare_op(rhs, CompareOp::NotEqual)
     }
 
+    #[expect(unused)]
     pub fn compare_less_than(self, rhs: Self) -> Self {
         self.compare_op(rhs, CompareOp::LessThan)
     }
 
+    #[expect(unused)]
     pub fn compare_less_than_or_equal(self, rhs: Self) -> Self {
         self.compare_op(rhs, CompareOp::LessThanOrEqual)
     }
 
+    #[expect(unused)]
     pub fn compare_greater_than(self, rhs: Self) -> Self {
         self.compare_op(rhs, CompareOp::GreaterThan)
     }
 
+    #[expect(unused)]
     pub fn compare_greater_than_or_equal(self, rhs: Self) -> Self {
         self.compare_op(rhs, CompareOp::GreaterThanOrEqual)
     }
