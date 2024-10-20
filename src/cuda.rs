@@ -1,5 +1,5 @@
 use crate::{
-    backend::{Backend, Executor, Instruction, TensorMap},
+    backend::{Backend, Executor, Instruction, Plan, TensorMap},
     cuda::{
         allocator::{Memory, StreamId},
         context::{CudaContext, CudaEvent, CudaStream},
@@ -15,7 +15,7 @@ use cudarc::{
     driver::sys::{CUevent, CUevent_flags_enum, CUevent_wait_flags_enum},
 };
 use instr::pointwise::PointwiseGraph;
-use std::{sync::Arc, thread};
+use std::sync::Arc;
 
 mod allocator;
 pub mod context;
@@ -72,7 +72,7 @@ impl Backend for Cuda {
         // `data` needs to live until the transfer completes.
         // for now, we implement this by dropping the vec
         // on a thread once the event completes.
-        thread::spawn(move || {
+        rayon::spawn(move || {
             event.sync().expect("failed to sync on event");
             drop(data);
         });
@@ -105,7 +105,7 @@ impl Backend for Cuda {
         // Keep tensor alive until download completes
         let tensor_clone = tensor.clone();
 
-        thread::spawn(move || {
+        rayon::spawn(move || {
             event.sync().expect("failed to sync event");
             callback(data);
             drop(tensor_clone);
@@ -116,8 +116,11 @@ impl Backend for Cuda {
         &self,
         input_tensors: &TensorMap<Self>,
         device: Self::Device,
+        plan: &Plan<Self>,
     ) -> Self::Executor {
         let cx = CudaContext::global(device).expect("failed to get CUDA context");
+
+        parallel_compile_kernels(plan, cx);
 
         let allocation_stream = cx
             .allocator()
@@ -135,6 +138,14 @@ impl Backend for Cuda {
                     .expect("failed to create event")
             })
             .collect();
+
+        let start = CudaEvent::new().expect("failed to create CUDA event");
+        let stop = CudaEvent::new().expect("failed to create CUDA event");
+
+        start
+            .record(&streams[0])
+            .expect("failed to record CUDA event");
+
         CudaExecutor {
             cx,
             streams,
@@ -144,6 +155,8 @@ impl Backend for Cuda {
             allocation_stream,
             synced_tensors: AHashSet::new(),
             synced_tensors_this_step: Vec::new(),
+            start,
+            stop,
         }
     }
 }
@@ -157,6 +170,11 @@ pub struct CudaExecutor {
     allocation_stream: StreamId,
     synced_tensors: AHashSet<TensorStorageId>,
     synced_tensors_this_step: Vec<TensorStorageId>,
+
+    /// Events used for profiling.
+    #[cfg_attr(not(feature = "cuda-tracing"), expect(unused))]
+    start: CudaEvent,
+    stop: CudaEvent,
 }
 
 impl Executor<Cuda> for CudaExecutor {
@@ -165,6 +183,7 @@ impl Executor<Cuda> for CudaExecutor {
         self.hold_allocations.clear();
     }
 
+    #[profiling::function]
     fn allocate_tensor(
         &self,
         device: <Cuda as Backend>::Device,
@@ -176,6 +195,7 @@ impl Executor<Cuda> for CudaExecutor {
             .unwrap_or_else(|e| panic!("failed to allocate tensor for {len}x {data_type:?}: {e}"))
     }
 
+    #[profiling::function]
     fn execute_instr(&mut self, instr: &Instr, tensors: &mut TensorMap<Cuda>) {
         let stream = &self.streams[self.instr_index % self.streams.len()];
 
@@ -204,6 +224,7 @@ impl Executor<Cuda> for CudaExecutor {
         }
     }
 
+    #[profiling::function]
     fn end_step(&mut self) {
         for (event, stream) in self.sync_events.iter().zip(self.streams) {
             unsafe {
@@ -232,6 +253,15 @@ impl Executor<Cuda> for CudaExecutor {
 
 impl Drop for CudaExecutor {
     fn drop(&mut self) {
+        self.stop
+            .record(&self.streams[0])
+            .expect("failed to record stop event");
+        #[cfg(feature = "cuda-tracing")]
+        {
+            let time_elapsed = self.stop.measure_time_elapsed(&self.start).unwrap();
+            tracing::debug!("GPU execution time: {time_elapsed:.2?}");
+        }
+
         for event in self.sync_events.drain(..) {
             unsafe {
                 driver::result::event::destroy(event).expect("failed to destroy event");
@@ -242,4 +272,14 @@ impl Drop for CudaExecutor {
             .set_previous_alloc_stream_for_thread(self.allocation_stream);
         self.cx.allocator().end_stream(self.allocation_stream);
     }
+}
+
+fn parallel_compile_kernels(plan: &Plan<Cuda>, cx: &CudaContext) {
+    use rayon::prelude::*;
+    plan.steps()
+        .par_iter()
+        .flat_map(|step| step.instrs().par_iter())
+        .for_each(|instr| {
+            instr.precompile(cx);
+        });
 }

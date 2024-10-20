@@ -13,6 +13,7 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
+#[profiling::function]
 pub fn generate_cached_plan<B: Backend>(op_graph: &Arc<OpGraph>, backend: &B) -> Plan<B> {
     static CACHE: OnceLock<Mutex<PlanCache>> = OnceLock::new();
 
@@ -22,6 +23,7 @@ pub fn generate_cached_plan<B: Backend>(op_graph: &Arc<OpGraph>, backend: &B) ->
         .get_or_insert(op_graph, backend)
 }
 
+#[profiling::function]
 fn generate_plan<B: Backend>(op_graph: &Arc<OpGraph>, backend: &B) -> Plan<B> {
     let mut graph = make_instr_graph(op_graph, backend);
     do_fusions(&mut graph, op_graph);
@@ -70,8 +72,8 @@ pub struct Plan<B: Backend> {
 }
 
 impl<B: Backend> Plan<B> {
-    pub fn steps(&self) -> impl Iterator<Item = &Step<B>> {
-        self.steps.iter()
+    pub fn steps(&self) -> &[Step<B>] {
+        &self.steps
     }
 }
 
@@ -155,6 +157,7 @@ impl<B: Backend> InstrGraph<B> {
         self.instrs[a].can_fuse_with(&self.instrs[b], op_graph) && self.num_paths(a, b) == 1
     }
 
+    #[profiling::function]
     fn num_paths(&self, a: InstrNodeId, b: InstrNodeId) -> usize {
         let mut count = 0;
         let mut stack = vec![a];
@@ -188,6 +191,7 @@ slotmap::new_key_type! {
      struct InstrNodeId;
 }
 
+#[profiling::function]
 fn do_fusions<B: Backend>(graph: &mut InstrGraph<B>, op_graph: &Arc<OpGraph>) {
     let mut working_set: BTreeSet<InstrNodeId> = graph.instrs.keys().collect();
 
@@ -210,6 +214,7 @@ fn do_fusions<B: Backend>(graph: &mut InstrGraph<B>, op_graph: &Arc<OpGraph>) {
     }
 }
 
+#[profiling::function]
 fn make_instr_graph<B: Backend>(op_graph: &Arc<OpGraph>, backend: &B) -> InstrGraph<B> {
     let mut graph = InstrGraph::new();
 
@@ -225,6 +230,7 @@ fn make_instr_graph<B: Backend>(op_graph: &Arc<OpGraph>, backend: &B) -> InstrGr
 
 /// Performs a topological sort of the graph
 /// to generate a plan that maximizes concurrency.
+#[profiling::function]
 fn generate_plan_from_graph<B: Backend>(mut graph: InstrGraph<B>, op_graph: &OpGraph) -> Plan<B> {
     let num_instrs = graph.instrs.len();
 
@@ -271,11 +277,12 @@ fn generate_plan_from_graph<B: Backend>(mut graph: InstrGraph<B>, op_graph: &OpG
     plan
 }
 
+#[profiling::function]
 fn analyze_tensor_lifetimes<B: Backend>(plan: &mut Plan<B>, op_graph: &OpGraph) {
     let mut tensor_release_steps = Vec::<Vec<NodeId>>::new();
     tensor_release_steps.push(Vec::new()); // no frees on first step
 
-    for (i, step) in plan.steps().enumerate() {
+    for (i, step) in plan.steps().iter().enumerate() {
         // Determine which tensors can be freed
         // at the next step, which is the subset
         // of used_tensors that are not used in any future

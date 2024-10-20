@@ -3,6 +3,7 @@ use crate::{
     opgraph::{op::Op, NodeId, OpGraph},
     shape::Shape,
 };
+pub use optimization::Plan;
 use slotmap::SecondaryMap;
 use std::{fmt::Debug, sync::Arc};
 
@@ -28,10 +29,12 @@ pub trait Backend: Copy + Sized + Debug + Send + Sync + 'static {
         &self,
         input_tensors: &TensorMap<Self>,
         device: Self::Device,
+        plan: &Plan<Self>,
     ) -> Self::Executor;
 }
 
 pub trait BackendExt: Backend {
+    #[profiling::function]
     fn execute_graph(
         &self,
         device: Self::Device,
@@ -44,7 +47,7 @@ pub trait BackendExt: Backend {
 
         let mut tensors = TensorMap::new(&graph, inputs);
 
-        let mut executor = self.begin_execute(&tensors, device);
+        let mut executor = self.begin_execute(&tensors, device, &plan);
         for step in plan.steps() {
             for released_tensor in step.tensors_to_release() {
                 tensors.free(*released_tensor);

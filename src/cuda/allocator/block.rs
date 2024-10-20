@@ -34,6 +34,7 @@ impl BlockAllocator {
         page
     }
 
+    #[profiling::function]
     pub fn allocate(
         &mut self,
         size: u64,
@@ -99,6 +100,7 @@ impl BlockAllocator {
     ///
     /// Behavior is unspecified if the block was not previously
     /// allocated from `self`, or if it was already freed.
+    #[profiling::function]
     pub fn deallocate(&mut self, block: Block) {
         self.add_free_block(block);
     }

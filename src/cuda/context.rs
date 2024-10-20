@@ -22,6 +22,7 @@ use std::{
     cell::Cell,
     iter,
     sync::{Arc, OnceLock},
+    time::Duration,
 };
 use thread_local::ThreadLocal;
 
@@ -217,6 +218,17 @@ impl CudaEvent {
             driver::sys::lib().cuEventSynchronize(self.raw).result()?;
         }
         Ok(())
+    }
+
+    pub fn measure_time_elapsed(&self, start: &CudaEvent) -> Result<Duration, CudaError> {
+        self.sync()?;
+        let mut millis = 0.0f32;
+        unsafe {
+            driver::sys::lib()
+                .cuEventElapsedTime(&mut millis, start.raw, self.raw)
+                .result()?;
+        }
+        Ok(Duration::from_secs_f32(millis / 1000.0))
     }
 }
 

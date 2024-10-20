@@ -39,19 +39,18 @@ impl CudnnGraph {
 }
 
 impl CudnnGraph {
-    pub fn execute(
-        &self,
-        tensors: &TensorMap<Cuda>,
-        stream: &CudaStream,
-        cx: &CudaContext,
-        hold_allocations: &mut Vec<Memory>,
-    ) {
-        let cudnn = cx.cudnn_handle();
+    pub fn precompile(&self, cx: &CudaContext) {
+        self.get_engine(cx.cudnn_handle());
+    }
 
+    fn get_engine(
+        &self,
+        cudnn: &CudnnContext,
+    ) -> (Arc<Engine>, Arc<SecondaryMap<NodeId, TensorDescriptor>>) {
         static ENGINE_CACHE: OnceLock<
             Mutex<AHashMap<OpSubgraph, (Arc<Engine>, Arc<SecondaryMap<NodeId, TensorDescriptor>>)>>,
         > = OnceLock::new();
-        let (engine, tensor_desc_map) = match ENGINE_CACHE
+        match ENGINE_CACHE
             .get_or_init(Default::default)
             .lock()
             .entry(self.subgraph.clone())
@@ -63,7 +62,19 @@ impl CudnnGraph {
                     Arc::new(Engine::choose_with_heuristic(&graph).expect("failed to get engine"));
                 entry.insert((engine, Arc::new(tensor_desc_map))).clone()
             }
-        };
+        }
+    }
+
+    #[profiling::function]
+    pub fn execute(
+        &self,
+        tensors: &TensorMap<Cuda>,
+        stream: &CudaStream,
+        cx: &CudaContext,
+        hold_allocations: &mut Vec<Memory>,
+    ) {
+        let cudnn = cx.cudnn_handle();
+        let (engine, tensor_desc_map) = self.get_engine(cudnn);
 
         let workspace_size = engine
             .workspace_size()

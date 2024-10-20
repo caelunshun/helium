@@ -178,6 +178,7 @@ impl KernelBuilder {
         }
     }
 
+    #[profiling::function]
     pub fn build(
         &self,
         kernel_name: &str,

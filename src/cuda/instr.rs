@@ -33,6 +33,13 @@ impl Instr {
             Instr::PointwiseGraph(instr) => instr.execute(tensors, stream, cx),
         }
     }
+
+    pub fn precompile(&self, cx: &CudaContext) {
+        match self {
+            Instr::CudnnGraph(instr) => instr.precompile(cx),
+            Instr::PointwiseGraph(instr) => instr.precompile(cx),
+        }
+    }
 }
 
 impl Instruction<Cuda> for Instr {

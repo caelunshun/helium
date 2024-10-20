@@ -36,6 +36,29 @@ impl PointwiseGraph {
         Self { subgraph }
     }
 
+    pub fn precompile(&self, cx: &CudaContext) {
+        self.get_kernel(cx);
+    }
+
+    fn get_kernel(&self, cx: &CudaContext) -> Arc<JitKernel> {
+        static KERNEL_CACHE: OnceLock<Mutex<AHashMap<OpSubgraph, Arc<JitKernel>>>> =
+            OnceLock::new();
+
+        KERNEL_CACHE
+            .get_or_init(Default::default)
+            .lock()
+            .entry(self.subgraph.clone())
+            .or_insert_with(|| {
+                Arc::new(
+                    jit::generate_kernel(&self.subgraph)
+                        .build("pointwise_kernel", cx)
+                        .expect("failed to compile kernel"),
+                )
+            })
+            .clone()
+    }
+
+    #[profiling::function]
     pub fn execute(&self, tensors: &TensorMap<Cuda>, stream: &CudaStream, cx: &CudaContext) {
         // Reduction outputs need to be initialized to their
         // initial values (e.g. zero for sum, -inf for max).
@@ -51,23 +74,8 @@ impl PointwiseGraph {
             }
         }
 
-        static KERNEL_CACHE: OnceLock<Mutex<AHashMap<OpSubgraph, Arc<JitKernel>>>> =
-            OnceLock::new();
-
-        let kernel = KERNEL_CACHE
-            .get_or_init(Default::default)
-            .lock()
-            .entry(self.subgraph.clone())
-            .or_insert_with(|| {
-                Arc::new(
-                    jit::generate_kernel(&self.subgraph)
-                        .build("pointwise_kernel", cx)
-                        .expect("failed to compile kernel"),
-                )
-            })
-            .clone();
         let grid_size = jit::compute_grid_size(&self.subgraph);
-        kernel
+        self.get_kernel(cx)
             .execute(
                 |node| tensors.get_storage(node),
                 stream,

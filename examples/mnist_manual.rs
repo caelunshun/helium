@@ -105,6 +105,7 @@ struct Item {
 }
 
 fn main() {
+    tracing_subscriber::fmt::init();
     let device = Device::Cuda(0);
     let mut rng = Pcg64Mcg::seed_from_u64(666);
     let mut model = Model::with_random_weights(&mut rng, device);
@@ -144,7 +145,7 @@ fn main() {
         })
         .collect();
 
-    let num_epochs = 10;
+    let num_epochs = 40;
     let lr = 1e1;
     let batch_size = 1024;
 
@@ -172,6 +173,7 @@ fn main() {
                 .flat_map(|item| item.label_one_hot.as_slice())
                 .copied()
                 .collect();
+
             let input = Tensor::<2>::from_vec(input, [batch_size, 28 * 28], device);
             let labels = Tensor::<2>::from_vec(labels, [batch_size, 10], device);
 
