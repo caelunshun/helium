@@ -2,6 +2,7 @@ use crate::{
     backend::{InstrPerf, Instruction, TensorMap},
     cuda::{
         context::{CudaContext, CudaStream},
+        kernel_jit::JitKernel,
         Cuda,
     },
     opgraph::{
@@ -10,7 +11,9 @@ use crate::{
         Intermediate, Node, NodeId, OpGraph,
     },
 };
-use std::sync::Arc;
+use ahash::AHashMap;
+use parking_lot::Mutex;
+use std::sync::{Arc, OnceLock};
 
 mod jit;
 
@@ -48,9 +51,21 @@ impl PointwiseGraph {
             }
         }
 
-        let kernel = jit::generate_kernel(&self.subgraph)
-            .build("pointwise_kernel", cx)
-            .expect("failed to compile kernel");
+        static KERNEL_CACHE: OnceLock<Mutex<AHashMap<OpSubgraph, Arc<JitKernel>>>> =
+            OnceLock::new();
+
+        let kernel = KERNEL_CACHE
+            .get_or_init(Default::default)
+            .lock()
+            .entry(self.subgraph.clone())
+            .or_insert_with(|| {
+                Arc::new(
+                    jit::generate_kernel(&self.subgraph)
+                        .build("pointwise_kernel", cx)
+                        .expect("failed to compile kernel"),
+                )
+            })
+            .clone();
         let grid_size = jit::compute_grid_size(&self.subgraph);
         kernel
             .execute(

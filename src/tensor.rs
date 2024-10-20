@@ -38,6 +38,10 @@ impl<const D: usize, C: DataClassTrait> Tensor<D, C> {
         self.raw
     }
 
+    pub fn async_start_eval(&self) {
+        self.raw.async_start_eval();
+    }
+
     pub fn device(&self) -> Device {
         self.raw.device()
     }

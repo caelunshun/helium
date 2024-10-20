@@ -82,7 +82,7 @@ impl PartialEq for OpSubgraph {
                 .nodes
                 .iter()
                 .zip(other.nodes.iter())
-                .all(|(a, b)| self.graph.get(*a) == other.graph.get(*b))
+                .all(|(a, b)| self.graph.get(*a) == other.graph.get(*b) && *a == *b)
             && self.inputs.len() == other.inputs.len()
             && self
                 .inputs

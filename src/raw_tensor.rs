@@ -32,6 +32,10 @@ pub struct RawTensor {
 }
 
 impl RawTensor {
+    pub fn async_start_eval(&self) {
+        self.make_concrete();
+    }
+
     pub fn num_dims(&self) -> usize {
         self.shape().num_dims()
     }

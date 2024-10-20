@@ -1,7 +1,9 @@
 use helium::{Device, Gradients, Param, Tensor};
 use mnist::MnistBuilder;
+use pollster::FutureExt;
 use rand::prelude::*;
 use rand_pcg::Pcg64Mcg;
+use std::{future::Future, pin::Pin, thread, time::Instant};
 
 struct Model {
     layers: [Layer; 3],
@@ -145,10 +147,20 @@ fn main() {
     let lr = 1e1;
     let batch_size = 1024;
 
+    let (loss_tx, loss_rx) = flume::bounded::<Pin<Box<dyn Future<Output = f32> + Send>>>(2);
+    let blocker_thread = thread::spawn(move || {
+        for loss in loss_rx {
+            let loss = loss.block_on();
+            println!("Training batch loss: {loss:.3}");
+        }
+    });
+
     for _epoch in 0..num_epochs {
         items.shuffle(&mut rng);
 
+        let mut prev = Instant::now();
         for batch in items.chunks_exact(batch_size) {
+            let start = Instant::now();
             let input: Vec<f32> = batch
                 .iter()
                 .flat_map(|item| item.image.as_slice())
@@ -163,16 +175,24 @@ fn main() {
             let labels = Tensor::<2>::from_vec(labels, [batch_size, 10], device);
 
             let logits = model.forward(input);
-            //let loss = (logits - labels).pow_scalar(2.0).reduce_mean::<1>(2);
             let loss = cross_entropy_loss(logits, labels);
 
-            let grads = loss.clone().backward();
+            let grads = loss.backward();
             model.update_weights(grads, lr);
 
-            let loss_scalar = loss.to_scalar::<f32>();
-            println!("Training batch loss: {loss_scalar:.3}");
+            loss.async_start_eval();
+            println!("Recorded in {:.2?}", start.elapsed());
+
+            loss_tx
+                .send(Box::pin(async move { loss.to_scalar_async::<f32>().await }))
+                .unwrap();
+            println!("Latency: {:.2?}", prev.elapsed());
+            prev = Instant::now();
         }
     }
+
+    drop(loss_tx);
+    blocker_thread.join().unwrap();
 
     // Validation
     let inputs: Vec<f32> = validation_items
