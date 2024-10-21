@@ -147,7 +147,7 @@ fn main() {
 
     let num_epochs = 100;
     let mut lr = 1e1;
-    let lr_gamma = 0.9;
+    let lr_gamma = 0.97;
     let batch_size = 1024;
 
     let (loss_tx, loss_rx) = flume::bounded::<Pin<Box<dyn Future<Output = f32> + Send>>>(2);
