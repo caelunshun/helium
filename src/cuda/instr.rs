@@ -1,3 +1,4 @@
+use super::allocator::StreamId;
 use crate::{
     backend::{InstrPerf, Instruction, TensorMap},
     cuda::{
@@ -27,9 +28,12 @@ impl Instr {
         stream: &CudaStream,
         cx: &CudaContext,
         hold_allocations: &mut Vec<Memory>,
+        allocation_stream: StreamId,
     ) {
         match self {
-            Instr::CudnnGraph(instr) => instr.execute(tensors, stream, cx, hold_allocations),
+            Instr::CudnnGraph(instr) => {
+                instr.execute(tensors, stream, cx, hold_allocations, allocation_stream)
+            }
             Instr::PointwiseGraph(instr) => instr.execute(tensors, stream, cx),
         }
     }

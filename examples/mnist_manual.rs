@@ -162,7 +162,6 @@ fn main() {
 
         let mut prev = Instant::now();
         for batch in items.chunks_exact(batch_size) {
-            let start = Instant::now();
             let input: Vec<f32> = batch
                 .iter()
                 .flat_map(|item| item.image.as_slice())
@@ -173,6 +172,8 @@ fn main() {
                 .flat_map(|item| item.label_one_hot.as_slice())
                 .copied()
                 .collect();
+
+            let start = Instant::now();
 
             let input = Tensor::<2>::from_vec(input, [batch_size, 28 * 28], device);
             let labels = Tensor::<2>::from_vec(labels, [batch_size, 10], device);
@@ -186,10 +187,10 @@ fn main() {
             loss.async_start_eval();
             println!("Recorded in {:.2?}", start.elapsed());
 
-            /* loss_tx
-            .send(Box::pin(async move { loss.to_scalar_async::<f32>().await }))
-            .unwrap();*/
-            println!("Training batch loss: {:.3}", loss.to_scalar::<f32>());
+            loss_tx
+                .send(Box::pin(async move { loss.to_scalar_async::<f32>().await }))
+                .unwrap();
+            // println!("Training batch loss: {:.3}", loss.to_scalar::<f32>());
             println!("Latency: {:.2?}", prev.elapsed());
             prev = Instant::now();
         }

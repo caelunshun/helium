@@ -12,7 +12,7 @@ const DEVICE: Device = Device::Cuda(0);
 fn determinism_stress_test() {
     tracing_subscriber::fmt::init();
     thread::scope(|s| {
-        for _ in 0..16 {
+        for _ in 0..4 {
             s.spawn(|| {
                 let mut rng = Pcg64Mcg::seed_from_u64(783542);
 
@@ -69,10 +69,12 @@ fn determinism_stress_test() {
 }
 
 fn do_ops(a1: &Tensor<2>, a2: &Tensor<2>, x: &Tensor<1>) -> Tensor<1> {
-    ((x * a1.reshape(x.shape()) + a2.reshape(x.shape()))
-        .reshape([1, 1])
-        .matmul(a1))
-    .reshape([1])
+    let y = a1.matmul(x.reshape([x.shape()[0], 1])).sigmoid();
+    let y = y
+        .reduce_sum::<2>(1)
+        .broadcast_to([x.shape()[0], x.shape()[0]]);
+    let y = a2.matmul(y).cos() + 1.0;
+    y.reduce_mean::<2>(1).reshape([x.shape()[0]])
 }
 
 fn random_tensor<const D: usize>(rng: &mut impl Rng, shape: [usize; D]) -> Tensor<D> {

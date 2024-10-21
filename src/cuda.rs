@@ -200,7 +200,13 @@ impl Executor<Cuda> for CudaExecutor {
             }
         }
 
-        instr.execute(tensors, stream, self.cx, &mut self.hold_allocations);
+        instr.execute(
+            tensors,
+            stream,
+            self.cx,
+            &mut self.hold_allocations,
+            self.allocation_stream,
+        );
 
         self.instr_index += 1;
 

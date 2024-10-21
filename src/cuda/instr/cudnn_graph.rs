@@ -1,7 +1,7 @@
 use crate::{
     backend::{InstrPerf, Instruction, TensorMap},
     cuda::{
-        allocator::Memory,
+        allocator::{Memory, StreamId},
         context::{CudaContext, CudaStream},
         cudnn::{
             self, CudnnContext, Engine, MatmulOpDescriptor, PointwiseMode, PointwiseOpDescriptor,
@@ -72,6 +72,7 @@ impl CudnnGraph {
         stream: &CudaStream,
         cx: &CudaContext,
         hold_allocations: &mut Vec<Memory>,
+        allocation_stream: StreamId,
     ) {
         let cudnn = cx.cudnn_handle();
         let (engine, tensor_desc_map) = self.get_engine(cudnn);
@@ -86,7 +87,7 @@ impl CudnnGraph {
         } else {
             workspace_mem = cx
                 .allocator()
-                .allocate(workspace_size as u64, 256)
+                .allocate_in_stream(workspace_size as u64, 256, allocation_stream)
                 .expect("failed to allocate workspace");
             let ptr = workspace_mem.device_ptr() as *mut c_void;
             // Prevent deallocation of workspace memory until after this
