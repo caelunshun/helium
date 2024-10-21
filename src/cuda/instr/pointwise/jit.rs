@@ -444,6 +444,7 @@ fn compute_node_output(
                     {reduce_grid_level}
                 }}
             }}
+            __syncthreads()
             "});
         }
         Op::ChangeDataType(op::ChangeDataType { input, target_type })
