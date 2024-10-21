@@ -16,7 +16,7 @@ fn determinism_stress_test() {
             s.spawn(|| {
                 let mut rng = Pcg64Mcg::seed_from_u64(783542);
 
-                let d = 1;
+                let d = 1024;
 
                 let a1 = Param::new(random_tensor(&mut rng, [d, d]));
                 let a2 = random_tensor(&mut rng, [d, d]);
@@ -27,8 +27,6 @@ fn determinism_stress_test() {
                 let grads = expected.reduce_mean::<1>(1).backward();
                 let expected_grad = grads.get::<2>(a1.id()).to_vec::<f32>();
                 let expected = expected.to_vec::<f32>();
-
-                dbg!(&expected_grad, &expected);
 
                 let (result_tx, result_rx) = flume::bounded::<
                     Pin<Box<dyn Future<Output = (Vec<f32>, Vec<f32>)> + Send + Sync>>,

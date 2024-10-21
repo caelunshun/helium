@@ -29,6 +29,10 @@ impl CudnnContext {
         }
         Ok(Self(Arc::new(ContextInner { handle })))
     }
+
+    pub fn id(&self) -> usize {
+        Arc::as_ptr(&self.0) as usize
+    }
 }
 
 struct ContextInner {

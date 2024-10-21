@@ -48,12 +48,17 @@ impl CudnnGraph {
         cudnn: &CudnnContext,
     ) -> (Arc<Engine>, Arc<SecondaryMap<NodeId, TensorDescriptor>>) {
         static ENGINE_CACHE: OnceLock<
-            Mutex<AHashMap<OpSubgraph, (Arc<Engine>, Arc<SecondaryMap<NodeId, TensorDescriptor>>)>>,
+            Mutex<
+                AHashMap<
+                    (usize, OpSubgraph),
+                    (Arc<Engine>, Arc<SecondaryMap<NodeId, TensorDescriptor>>),
+                >,
+            >,
         > = OnceLock::new();
         match ENGINE_CACHE
             .get_or_init(Default::default)
             .lock()
-            .entry(self.subgraph.clone())
+            .entry((cudnn.id(), self.subgraph.clone()))
         {
             Entry::Occupied(entry) => entry.get().clone(),
             Entry::Vacant(entry) => {
