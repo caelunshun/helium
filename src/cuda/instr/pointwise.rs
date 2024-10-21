@@ -10,6 +10,7 @@ use crate::{
         subgraph::OpSubgraph,
         Intermediate, Node, NodeId, OpGraph,
     },
+    DataType,
 };
 use ahash::AHashMap;
 use parking_lot::Mutex;
@@ -62,6 +63,8 @@ impl PointwiseGraph {
     pub fn execute(&self, tensors: &TensorMap<Cuda>, stream: &CudaStream, cx: &CudaContext) {
         // Reduction outputs need to be initialized to their
         // initial values (e.g. zero for sum, -inf for max).
+        // Boolean (bitset) outputs need to be initialized
+        // because of write access granularity of 1 bit.
         for output in self.subgraph.leafs() {
             if let Node::Intermediate(Intermediate {
                 op: Op::Reduce(op), ..
@@ -71,6 +74,8 @@ impl PointwiseGraph {
                     .get_storage(output)
                     .fill(initial_reduction_val(op.op), stream)
                     .expect("failed to fill reduction tensor with initial value");
+            } else if self.subgraph.graph().get(output).descriptor().data_type == DataType::Bool {
+                tensors.get_storage(output).fill(0.0, stream).unwrap();
             }
         }
 
@@ -124,11 +129,17 @@ fn supports_subgraph(subgraph: &OpSubgraph) -> bool {
     let mut reduction_shape = None;
 
     for node in subgraph.nodes() {
-        let Node::Intermediate(Intermediate { op, descriptor }) = subgraph.graph().get(node) else {
+        let Node::Intermediate(Intermediate { op, .. }) = subgraph.graph().get(node) else {
             unreachable!("node must be intermediate")
         };
 
-        if !matches!(op, Op::Reduce(_)) && subgraph.leafs().any(|l| l == node) {
+        let check_output_size_node = match op {
+            Op::Reduce(op) => op.input,
+            _ => node,
+        };
+
+        if subgraph.leafs().any(|l| l == node) {
+            let descriptor = subgraph.graph().get(check_output_size_node).descriptor();
             match output_size {
                 None => output_size = Some(descriptor.shape.num_elements()),
                 Some(output_size) => {

@@ -1,8 +1,5 @@
 use slotmap::SlotMap;
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    mem,
-};
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Default)]
 pub struct BlockAllocator {
@@ -216,17 +213,9 @@ impl BlockAllocator {
     pub fn end_stream(&mut self, id: StreamId) {
         let stream = self.streams.remove(id).expect("stream already ended");
         for block in stream.blocks_in_use {
-            if !self.free_blocks.contains_key(block) {
-                continue;
-            }
-            let mut in_use_by_streams = mem::take(&mut self.free_blocks[block].in_use_by_streams);
-            in_use_by_streams.remove(&id);
-            let modified_block = Block {
-                in_use_by_streams,
-                ..self.free_blocks[block].clone()
-            };
-            self.remove_free_block(block);
-            self.add_free_block(modified_block);
+            let mut block = self.remove_free_block(block);
+            block.in_use_by_streams.remove(&id);
+            self.add_free_block(block);
         }
 
         for stream in self.streams.values_mut() {

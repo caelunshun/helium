@@ -20,6 +20,8 @@ pub fn generate_kernel(subgraph: &OpSubgraph) -> KernelBuilder {
     let mut kernel = KernelBuilder::new();
     let mut cx = Context::default();
 
+    kernel.statement(format!("/* {subgraph:#?} */"));
+
     for input in subgraph.inputs() {
         cx.input_vars.insert(
             input,
@@ -53,15 +55,10 @@ pub fn generate_kernel(subgraph: &OpSubgraph) -> KernelBuilder {
     }
 
     let ReductionStrides { group_size, .. } = compute_reduction_stride(subgraph);
-    let blocks_per_group = (group_size + BLOCK_SIZE - 1) / BLOCK_SIZE;
-    let threads_per_group = blocks_per_group * BLOCK_SIZE;
-    let group_size_rounded_up =
-        (group_size + threads_per_group - 1) / threads_per_group * threads_per_group;
+    let blocks_per_group = group_size.div_ceil(BLOCK_SIZE);
 
     kernel.statement(format!("uint32_t group_size = {group_size};"));
-    kernel.statement(format!(
-        "uint32_t group = (blockDim.x * blockIdx.x) / {group_size_rounded_up};"
-    ));
+    kernel.statement(format!("uint32_t group = blockIdx.x / {blocks_per_group};"));
     kernel.statement(format!(
         "uint32_t block_group_start = blockIdx.x / {blocks_per_group} * {blocks_per_group};"
     ));
@@ -126,7 +123,7 @@ pub fn compute_grid_size(subgraph: &OpSubgraph) -> usize {
         group_size,
         num_groups,
     } = compute_reduction_stride(subgraph);
-    let blocks_per_group = (group_size + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    let blocks_per_group = group_size.div_ceil(BLOCK_SIZE);
     blocks_per_group * num_groups
 }
 
@@ -136,19 +133,19 @@ struct ReductionStrides {
 }
 
 fn compute_reduction_stride(subgraph: &OpSubgraph) -> ReductionStrides {
-    let output_shape = compute_output_shape(subgraph);
     for node in subgraph.nodes() {
         if let Node::Intermediate(Intermediate {
             op: Op::Reduce(reduce),
             ..
         }) = subgraph.graph().get(node)
         {
-            let group_size = output_shape.dims()
-                [(output_shape.num_dims() - reduce.depth as usize)..]
+            let input_shape = &subgraph.graph().get(reduce.input).descriptor().shape;
+
+            let group_size = input_shape.dims()[(input_shape.num_dims() - reduce.depth as usize)..]
                 .iter()
                 .copied()
                 .product();
-            let num_groups = output_shape.num_elements() / group_size;
+            let num_groups = input_shape.num_elements() / group_size;
             return ReductionStrides {
                 group_size,
                 num_groups,
@@ -157,7 +154,7 @@ fn compute_reduction_stride(subgraph: &OpSubgraph) -> ReductionStrides {
     }
     // No reduction; group size is same as output size
     ReductionStrides {
-        group_size: output_shape.num_elements(),
+        group_size: compute_output_shape(subgraph).num_elements(),
         num_groups: 1,
     }
 }
@@ -483,7 +480,7 @@ fn compute_node_output(
         // load/stores and not intermediate computations)
         Op::Reshape(op::Reshape { input, .. })
         | Op::ChangeDataType(op::ChangeDataType { input, .. }) => {
-            return compute_node_output(
+            let res = compute_node_output(
                 subgraph,
                 &Position {
                     node: *input,
@@ -492,6 +489,8 @@ fn compute_node_output(
                 kernel,
                 cx,
             );
+            cx.results_at_position.insert(position.clone(), res.clone());
+            return res;
         }
         _ => unreachable!("op {op:#?} not supported by PointwiseGraph"),
     }

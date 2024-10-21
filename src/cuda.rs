@@ -11,7 +11,7 @@ use crate::{
 };
 use ahash::AHashSet;
 use instr::pointwise::PointwiseGraph;
-use std::{mem, sync::Arc};
+use std::{mem, sync::Arc, thread};
 
 mod allocator;
 pub mod context;
@@ -68,7 +68,7 @@ impl Backend for Cuda {
         // `data` needs to live until the transfer completes.
         // for now, we implement this by dropping the vec
         // on a thread once the event completes.
-        rayon::spawn(move || {
+        thread::spawn(move || {
             event.sync().expect("failed to sync on event");
             drop(data);
         });
@@ -101,7 +101,7 @@ impl Backend for Cuda {
         // Keep tensor alive until download completes
         let tensor_clone = tensor.clone();
 
-        rayon::spawn(move || {
+        thread::spawn(move || {
             event.sync().expect("failed to sync event");
             callback(data);
             drop(tensor_clone);
@@ -249,7 +249,7 @@ impl Drop for CudaExecutor {
         let cx = self.cx;
         let allocation_stream = self.allocation_stream;
         let sync_events = mem::take(&mut self.sync_events);
-        rayon::spawn(move || {
+        thread::spawn(move || {
             for event in sync_events {
                 event.sync().unwrap();
             }

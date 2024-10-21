@@ -25,8 +25,103 @@ struct alignas(8) half4 {
 
 
 extern "C" __global__ void test(__nv_bfloat16 *ident0, __half *ident1, __nv_bfloat16 *ident11, __half *ident15) {
-    uint32_t group_size = 500;
-uint32_t group = (blockDim.x * blockIdx.x) / 512;
+    /* [
+    (
+        NodeId(
+            3v1,
+        ),
+        Intermediate(
+            Intermediate {
+                descriptor: Descriptor {
+                    shape: Shape(
+                        [
+                            5,
+                            10,
+                            10,
+                        ],
+                    ),
+                    data_type: F16,
+                },
+                op: Broadcast(
+                    Broadcast {
+                        input: NodeId(
+                            2v1,
+                        ),
+                        new_dim_count: 3,
+                        broadcast_axes: [
+                            BroadcastAxis {
+                                axis: 0,
+                                new_size: 5,
+                            },
+                            BroadcastAxis {
+                                axis: 1,
+                                new_size: 10,
+                            },
+                        ],
+                    },
+                ),
+            },
+        ),
+    ),
+    (
+        NodeId(
+            4v1,
+        ),
+        Intermediate(
+            Intermediate {
+                descriptor: Descriptor {
+                    shape: Shape(
+                        [
+                            5,
+                            10,
+                            10,
+                        ],
+                    ),
+                    data_type: Bf16,
+                },
+                op: BinaryPointwise(
+                    BinaryPointwise {
+                        lhs: NodeId(
+                            1v1,
+                        ),
+                        rhs: NodeId(
+                            3v1,
+                        ),
+                        op: Pow,
+                    },
+                ),
+            },
+        ),
+    ),
+    (
+        NodeId(
+            5v1,
+        ),
+        Intermediate(
+            Intermediate {
+                descriptor: Descriptor {
+                    shape: Shape(
+                        [
+                            1,
+                            10,
+                        ],
+                    ),
+                    data_type: F16,
+                },
+                op: UnaryPointwise(
+                    UnaryPointwise {
+                        input: NodeId(
+                            2v1,
+                        ),
+                        op: Cos,
+                    },
+                ),
+            },
+        ),
+    ),
+] */
+uint32_t group_size = 500;
+uint32_t group = blockIdx.x / 2;
 uint32_t block_group_start = blockIdx.x / 2 * 2;
 uint32_t index_in_group = (blockIdx.x - block_group_start) * blockDim.x + threadIdx.x;
 uint32_t out_index = 500 * group + index_in_group;

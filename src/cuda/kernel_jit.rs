@@ -128,7 +128,14 @@ impl KernelBuilder {
                 {statements}
             }}
         "};
-        //println!("{k}");
+        /*
+        static ID: AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        std::fs::write(
+            format!("kernel/{}.cu", ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)),
+            k.as_bytes(),
+        )
+        .unwrap();
+        */
         k
     }
 
@@ -164,6 +171,7 @@ impl KernelBuilder {
                         prec_sqrt: None,
                         prec_div: None,
                         fmad: None,
+                        //options: vec!["--device-debug".to_owned()],
                         options: vec![],
                         use_fast_math: None,
                         maxrregcount: None,

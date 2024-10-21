@@ -33,7 +33,7 @@ impl CudaAllocator {
     pub const MAX_ALIGN: u64 = 256; // alignment of cudaMalloc
     /// Minimum size of a page. Pages can be larger to
     /// accommodate larger single allocations.
-    const MIN_PAGE_SIZE: u64 = 1024 * 1024 * 1024; // 1 GiB
+    const MIN_PAGE_SIZE: u64 = 1024 * 1024 * 1024;
 
     /// # Safety
     /// `context` must outlive `self`.
@@ -118,7 +118,9 @@ impl CudaAllocator {
         let page = &self.pages[block.page];
         let ptr = page.ptr + block.start;
 
-        debug_assert!(block.start + size < page.size);
+        assert_eq!(block.size, size);
+        assert!(block.is_aligned_to(align));
+        assert!(block.start + size <= page.size);
 
         Ok(Memory {
             ptr,
@@ -139,9 +141,6 @@ impl CudaAllocator {
         tracing::info!("Allocating page of {}G", size / 1024 / 1024 / 1024);
 
         let ptr = unsafe { driver::result::malloc_sync(size.try_into().unwrap())? };
-        unsafe {
-            driver::result::memset_d8_sync(ptr, 0, size.try_into().unwrap())?;
-        }
 
         let page = Page { size, ptr };
         let page_id = self.block_allocator.add_page(size);
