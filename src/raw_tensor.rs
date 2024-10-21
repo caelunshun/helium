@@ -314,6 +314,15 @@ impl RawTensor {
     }
 
     #[expect(unused)]
+    pub fn min(self, other: Self) -> Self {
+        self.op_binary_pointwise(&other, BinaryPointwiseOp::Min)
+    }
+
+    #[expect(unused)]
+    pub fn max(self, other: Self) -> Self {
+        self.op_binary_pointwise(&other, BinaryPointwiseOp::Max)
+    }
+
     pub fn relu(self) -> Self {
         self.op_unary_pointwise(UnaryPointwiseOp::Relu)
     }
@@ -358,7 +367,6 @@ impl RawTensor {
         self.compare_op(rhs, CompareOp::NotEqual)
     }
 
-    #[expect(unused)]
     pub fn compare_less_than(self, rhs: Self) -> Self {
         self.compare_op(rhs, CompareOp::LessThan)
     }

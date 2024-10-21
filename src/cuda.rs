@@ -11,7 +11,10 @@ use crate::{
 };
 use ahash::AHashSet;
 use instr::pointwise::PointwiseGraph;
-use std::{mem, sync::Arc, thread};
+use std::{
+    mem,
+    sync::{Arc, OnceLock},
+};
 
 mod allocator;
 pub mod context;
@@ -68,7 +71,7 @@ impl Backend for Cuda {
         // `data` needs to live until the transfer completes.
         // for now, we implement this by dropping the vec
         // on a thread once the event completes.
-        thread::spawn(move || {
+        blocking_pool().spawn(move || {
             event.sync().expect("failed to sync on event");
             drop(data);
         });
@@ -101,7 +104,7 @@ impl Backend for Cuda {
         // Keep tensor alive until download completes
         let tensor_clone = tensor.clone();
 
-        thread::spawn(move || {
+        blocking_pool().spawn(move || {
             event.sync().expect("failed to sync event");
             callback(data);
             drop(tensor_clone);
@@ -255,7 +258,7 @@ impl Drop for CudaExecutor {
         let cx = self.cx;
         let allocation_stream = self.allocation_stream;
         let sync_events = mem::take(&mut self.sync_events);
-        thread::spawn(move || {
+        blocking_pool().spawn(move || {
             for event in sync_events {
                 event.sync().unwrap();
             }
@@ -272,4 +275,10 @@ fn parallel_compile_kernels(plan: &Plan<Cuda>, cx: &CudaContext) {
         .for_each(|instr| {
             instr.precompile(cx);
         });
+}
+
+/// Thread pool for blocking operations.
+fn blocking_pool() -> &'static rayon::ThreadPool {
+    static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
+    POOL.get_or_init(|| rayon::ThreadPoolBuilder::new().build().unwrap())
 }

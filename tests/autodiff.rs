@@ -143,3 +143,13 @@ fn basic_gradient_descent() {
         guess.set_value(guess.value().clone() - (gradient * learning_rate));
     }
 }
+
+#[test]
+fn relu() {
+    let p = Param::new(Tensor::<1>::from_array([1.0, 2.0, 3.0, -4.0], DEVICE));
+    let x = Tensor::<1>::from_array([1.0, -1.0, 5.0, -10.0], DEVICE);
+    let y = (&x * &p).relu();
+    let grad: Tensor<1> = y.reduce_sum::<1>(1).backward().get(p.id());
+
+    assert_ulps_eq!(grad.to_vec::<f32>().as_slice(), &[1.0, 0.0, 5.0, -10.0][..]);
+}

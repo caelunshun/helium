@@ -308,6 +308,17 @@ impl<const D: usize> Tensor<D, Float> {
         self.op(|x| x.tan(), |x, flow| flow / (x.cos().pow_scalar(2.0)))
     }
 
+    pub fn relu(&self) -> Self {
+        self.op(
+            |x| x.relu(),
+            |x, flow| {
+                let zero = RawTensor::from_float(0.0, x.device()).broadcast_to(x.shape());
+                let one = RawTensor::from_float(1.0, x.device()).broadcast_to(x.shape());
+                x.clone().compare_less_than(zero.clone()).select(zero, one) * flow
+            },
+        )
+    }
+
     /// Row-major matrix multiplication: `self * rhs`.
     /// Optionally batched.
     pub fn matmul(&self, rhs: impl AsTensor<D>) -> Self {
