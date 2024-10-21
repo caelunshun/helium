@@ -24,7 +24,7 @@ impl Model {
         for (i, layer) in self.layers.iter().enumerate() {
             x = layer.forward(x);
             if i != self.layers.len() - 1 {
-                x = x.sigmoid();
+                x = x.relu();
             }
         }
         x
@@ -145,8 +145,9 @@ fn main() {
         })
         .collect();
 
-    let num_epochs = 40;
-    let lr = 1e1;
+    let num_epochs = 100;
+    let mut lr = 1e1;
+    let lr_gamma = 0.9;
     let batch_size = 1024;
 
     let (loss_tx, loss_rx) = flume::bounded::<Pin<Box<dyn Future<Output = f32> + Send>>>(2);
@@ -194,6 +195,7 @@ fn main() {
             println!("Latency: {:.2?}", prev.elapsed());
             prev = Instant::now();
         }
+        lr *= lr_gamma;
     }
 
     drop(loss_tx);
