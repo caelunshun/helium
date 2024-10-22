@@ -1,4 +1,5 @@
 use crate::{
+    conv::Conv2dSettings,
     data_type::DataType,
     opgraph::{Descriptor, NodeId},
     shape::Shape,
@@ -17,6 +18,9 @@ pub enum Op {
     SwapDims(SwapDims),
     Compare(Compare),
     Select(Select),
+    Conv(Conv),
+    ConvBackwardData(ConvBackwardData),
+    ConvBackwardFilter(ConvBackwardFilter),
 }
 
 impl Op {
@@ -32,6 +36,9 @@ impl Op {
             Op::SwapDims(op) => vec![op.input],
             Op::Compare(op) => vec![op.lhs, op.rhs],
             Op::Select(op) => vec![op.lhs, op.rhs, op.selector],
+            Op::Conv(op) => vec![op.image, op.filter],
+            Op::ConvBackwardData(op) => vec![op.flow, op.filter],
+            Op::ConvBackwardFilter(op) => vec![op.flow, op.image],
         }
     }
 
@@ -103,6 +110,53 @@ impl Op {
                 // Assume lhs and rhs have same data type and shape (validated at high-level API0
                 get_input_descriptor(op.lhs)
             }
+            Op::Conv(op) => {
+                let image = get_input_descriptor(op.image);
+                let filter = get_input_descriptor(op.filter);
+
+                let input_size = [image.shape.dim_at(1), image.shape.dim_at(2)];
+                let kernel_size = [filter.shape.dim_at(1), filter.shape.dim_at(2)];
+                let output_size = op.settings.compute_output_size(input_size, kernel_size);
+
+                let batch_size = image.shape.dim_at(0);
+
+                Descriptor {
+                    data_type: image.data_type,
+                    shape: Shape::new([
+                        batch_size,
+                        output_size[0],
+                        output_size[1],
+                        op.settings.out_channels,
+                    ]),
+                }
+            }
+            Op::ConvBackwardData(op) => {
+                let flow = get_input_descriptor(op.flow);
+                let batch_size = flow.shape.dim_at(0);
+
+                Descriptor {
+                    data_type: flow.data_type,
+                    shape: Shape::new([
+                        batch_size,
+                        op.settings.in_channels,
+                        op.input_size[0],
+                        op.input_size[1],
+                    ]),
+                }
+            }
+            Op::ConvBackwardFilter(op) => {
+                let flow = get_input_descriptor(op.flow);
+
+                Descriptor {
+                    data_type: flow.data_type,
+                    shape: Shape::new([
+                        op.settings.out_channels,
+                        op.settings.kernel_size[0],
+                        op.settings.kernel_size[1],
+                        op.settings.in_channels,
+                    ]),
+                }
+            }
         }
     }
 
@@ -118,6 +172,9 @@ impl Op {
             Op::Reshape(_) => OpKind::Reshape,
             Op::Compare(_) => OpKind::Compare,
             Op::Select(_) => OpKind::Select,
+            Op::Conv(_) => OpKind::Conv,
+            Op::ConvBackwardData(_) => OpKind::ConvBackwardData,
+            Op::ConvBackwardFilter(_) => OpKind::ConvBackwardFilter,
         }
     }
 
@@ -158,6 +215,18 @@ impl Op {
                 op.rhs = mapping[op.rhs];
                 op.selector = mapping[op.selector];
             }
+            Op::Conv(op) => {
+                op.image = mapping[op.image];
+                op.filter = mapping[op.filter];
+            }
+            Op::ConvBackwardData(op) => {
+                op.flow = mapping[op.flow];
+                op.filter = mapping[op.filter];
+            }
+            Op::ConvBackwardFilter(op) => {
+                op.flow = mapping[op.flow];
+                op.image = mapping[op.image];
+            }
         }
     }
 }
@@ -174,6 +243,9 @@ pub enum OpKind {
     Reshape,
     Compare,
     Select,
+    Conv,
+    ConvBackwardData,
+    ConvBackwardFilter,
 }
 
 /// Batched multiplication of column-major matrices stored in the last
@@ -340,4 +412,26 @@ pub struct Select {
     pub rhs: NodeId,
     /// Boolean tensor. Selects `lhs` for `false` and `rhs` for `true`.
     pub selector: NodeId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Conv {
+    pub settings: Conv2dSettings,
+    pub image: NodeId,
+    pub filter: NodeId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ConvBackwardFilter {
+    pub settings: Conv2dSettings,
+    pub image: NodeId,
+    pub flow: NodeId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ConvBackwardData {
+    pub input_size: [usize; 2],
+    pub settings: Conv2dSettings,
+    pub filter: NodeId,
+    pub flow: NodeId,
 }

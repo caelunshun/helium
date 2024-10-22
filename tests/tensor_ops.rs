@@ -1,6 +1,9 @@
 use approx::assert_ulps_eq;
 use half::{bf16, f16};
-use helium::{Device, Tensor};
+use helium::{
+    conv::{Conv2dSettings, PaddingMode},
+    Device, Tensor,
+};
 
 const DEVICE: Device = Device::Cuda(0);
 
@@ -358,6 +361,26 @@ fn swap_dims() {
         result,
         &[1.0, 2.0, 5.0, 6.0, 3.0, 4.0, 7.0, 8.0, 9.0, 10.0, 13.0, 14.0, 11.0, 12.0, 15.0, 16.0]
     );
+}
+
+#[test]
+fn conv_simple() {
+    let x = Tensor::<1>::from_array([1.0, 2.0], DEVICE).reshape([1, 1, 1, 2]);
+    let w = Tensor::<1>::from_array([10.0, 20.0, 30.0, 40.0], DEVICE).reshape([2, 1, 1, 2]);
+    let y = x.conv2d(
+        &w,
+        Conv2dSettings {
+            in_channels: 2,
+            out_channels: 2,
+            kernel_size: [1, 1],
+            stride: [1, 1],
+            dilation: [1, 1],
+            padding_mode: PaddingMode::Same,
+        },
+    );
+    assert_eq!(y.shape(), [1, 1, 1, 2]);
+
+    assert_ulps_eq!(y.to_vec::<f32>().as_slice(), &[50.0, 110.0,][..]);
 }
 
 #[test]

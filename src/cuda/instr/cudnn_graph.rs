@@ -1,11 +1,14 @@
 use crate::{
     backend::{InstrPerf, Instruction, TensorMap},
+    conv::Conv2dSettings,
     cuda::{
         allocator::{Memory, StreamId},
         context::{CudaContext, CudaStream},
         cudnn::{
-            self, CudnnContext, Engine, MatmulOpDescriptor, PointwiseMode, PointwiseOpDescriptor,
-            TensorDescriptor, TensorKind, VariantPack, VariantPackBuilder,
+            self, ConvDescriptor, ConvolutionBackwardDataDescriptor,
+            ConvolutionBackwardFilterDescriptor, ConvolutionForwardOpDescriptor, CudnnContext,
+            Engine, MatmulOpDescriptor, PointwiseMode, PointwiseOpDescriptor, TensorDescriptor,
+            TensorKind, VariantPack, VariantPackBuilder,
         },
         Cuda,
     },
@@ -141,14 +144,17 @@ impl CudnnGraph {
             let is_virtual = !(self.subgraph.leafs().any(|l| l == node_id)
                 || self.subgraph.inputs().any(|i| i == node_id));
 
-            let tensor_desc = TensorDescriptor::new(
+            let (augmented_shape, strides) = mode.augment_tensor_shape(&node.descriptor().shape);
+
+            let tensor_desc = TensorDescriptor::with_strides(
                 if is_virtual {
                     TensorKind::Virtual
                 } else {
                     TensorKind::Concrete
                 },
                 node.descriptor().data_type,
-                &mode.augment_tensor_shape(&node.descriptor().shape),
+                &augmented_shape,
+                &strides,
             )
             .expect("failed to create tensor descriptor");
 
@@ -195,6 +201,42 @@ impl CudnnGraph {
                         &tensor_descriptors[output],
                     )
                     .expect("failed to build matmul op"),
+                );
+            }
+            Op::Conv(op) => {
+                let conv = make_conv_descriptor(&op.settings);
+                builder.add_op(
+                    ConvolutionForwardOpDescriptor::new(
+                        &conv,
+                        &tensor_descriptors[op.filter],
+                        &tensor_descriptors[op.image],
+                        &tensor_descriptors[output],
+                    )
+                    .expect("failed to build forward conv op"),
+                );
+            }
+            Op::ConvBackwardData(op) => {
+                let conv = make_conv_descriptor(&op.settings);
+                builder.add_op(
+                    ConvolutionBackwardDataDescriptor::new(
+                        &conv,
+                        &tensor_descriptors[op.filter],
+                        &tensor_descriptors[op.flow],
+                        &tensor_descriptors[output],
+                    )
+                    .expect("failed to build conv backward data op"),
+                );
+            }
+            Op::ConvBackwardFilter(op) => {
+                let conv = make_conv_descriptor(&op.settings);
+                builder.add_op(
+                    ConvolutionBackwardFilterDescriptor::new(
+                        &conv,
+                        &tensor_descriptors[op.image],
+                        &tensor_descriptors[op.flow],
+                        &tensor_descriptors[output],
+                    )
+                    .expect("failed to build conv backward filter op"),
                 );
             }
             Op::SwapDims(_) => todo!(),
@@ -300,6 +342,7 @@ impl Instruction<Cuda> for CudnnGraph {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum Mode {
     Matmul,
+    Conv2d,
 }
 
 impl Mode {
@@ -308,13 +351,17 @@ impl Mode {
             if let Node::Intermediate(Intermediate { op, .. }) = subgraph.graph().get(node) {
                 if let Op::Matmul(_) = op {
                     return Mode::Matmul;
+                } else if let Op::Conv(_) | Op::ConvBackwardFilter(_) | Op::ConvBackwardData(_) = op
+                {
+                    return Mode::Conv2d;
                 }
             }
         }
         unreachable!("unsupported subgraph for cuDNN")
     }
 
-    pub fn augment_tensor_shape(&self, shape: &Shape) -> Shape {
+    /// Gets tensor shape and strides to pass to the cuDNN API.
+    pub fn augment_tensor_shape(&self, shape: &Shape) -> (Shape, Vec<usize>) {
         match self {
             Mode::Matmul => {
                 // cuDNN as of v9.6.0 appears to have a bug where
@@ -324,8 +371,36 @@ impl Mode {
                 if new_shape.len() == 2 {
                     new_shape.insert(0, 1);
                 }
-                Shape::new(new_shape)
+                let shape = Shape::new(new_shape);
+                let strides = cudnn::compute_packed_strides(&shape);
+                (shape, strides)
+            }
+            Mode::Conv2d => {
+                // Helium tensors are always in NHWC layout,
+                // as this gives better performance. But the cuDNN
+                // API expects the (virtual) tensor shape to be
+                // specified as NCHW. To make this work,
+                // we modify the shape to NCHW while computing
+                // strides such that the in-memory layout matches NHWC.
+                let [n, h, w, c] = shape.dims().try_into().unwrap();
+                let new_shape = Shape::new([n, c, h, w]);
+                let strides = vec![h * w * c, 1, w * c, c];
+                (new_shape, strides)
             }
         }
     }
+}
+
+fn make_conv_descriptor(settings: &Conv2dSettings) -> ConvDescriptor {
+    let padding = settings
+        .padding_mode
+        .compute_padding_amount(settings.kernel_size);
+    ConvDescriptor::new(
+        DataType::F32,
+        2,
+        &[settings.dilation[0] as u64, settings.dilation[1] as u64],
+        &[settings.stride[0] as u64, settings.stride[1] as u64],
+        &[padding[0] as u64, padding[1] as u64],
+    )
+    .expect("failed to build conv descriptor")
 }

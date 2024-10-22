@@ -1,5 +1,6 @@
 use crate::{
     backend::{Backend, BackendExt},
+    conv::Conv2dSettings,
     data_type::{DataType, DataTypeConversion, DataVec, Float},
     device::Device,
     opgraph::{
@@ -172,6 +173,91 @@ impl RawTensor {
             Op::Matmul(op::Matmul {
                 input_a: lhs,
                 input_b: rhs,
+            }),
+        )
+    }
+
+    /// Batched 2D convolution. Image tensor layout is `NHWC` (channel dimension last).
+    /// Kernel tensor layout is `KRSC`.
+    /// `N` = batch size
+    /// `H` = height
+    /// `W` = width
+    /// `C` = input channel count
+    /// `K` = output channel count
+    /// `R` = kernel height
+    /// `S` = kernel width
+    pub fn conv2d(self, filter: Self, settings: Conv2dSettings) -> Self {
+        settings.validate();
+
+        let image_shape = self.shape();
+        let filter_shape = filter.shape();
+
+        assert_eq!(
+            image_shape.num_dims(),
+            4,
+            "conv2d requires exactly 4 image dimensions (including a batch dimension)"
+        );
+        assert_eq!(
+            filter_shape.num_dims(),
+            4,
+            "conv2d requires exactly 4 filter dimensions: KRSC"
+        );
+
+        assert_eq!(
+            image_shape.dim_at(3),
+            settings.in_channels,
+            "dimension 3 must equal the number of channels"
+        );
+
+        assert_eq!(filter_shape.dim_at(1), settings.kernel_size[0]);
+        assert_eq!(filter_shape.dim_at(2), settings.kernel_size[1]);
+        assert_eq!(filter_shape.dim_at(0), settings.out_channels);
+        assert_eq!(filter_shape.dim_at(3), settings.in_channels);
+
+        let (cx, image) = self.make_graph();
+        let filter = filter.to_graph(&cx);
+        Self::from_op(
+            &cx,
+            Op::Conv(op::Conv {
+                settings,
+                image,
+                filter,
+            }),
+        )
+    }
+
+    pub fn conv2d_backward_data(
+        self,
+        filter: Self,
+        settings: Conv2dSettings,
+        input_size: [usize; 2],
+    ) -> Self {
+        // TODO: validation
+        // (this function is only used internally by Tensor autodiff)
+        let (cx, flow) = self.make_graph();
+        let filter = filter.to_graph(&cx);
+        Self::from_op(
+            &cx,
+            Op::ConvBackwardData(op::ConvBackwardData {
+                settings,
+                flow,
+                filter,
+                input_size,
+            }),
+        )
+    }
+
+    pub fn conv2d_backward_filter(self, image: Self, settings: Conv2dSettings) -> Self {
+        // TODO: validation
+        // (this function is only used internally by Tensor autodiff)
+        let (cx, flow) = self.make_graph();
+        let image = image.to_graph(&cx);
+        Self::from_op(
+            &cx,
+            Op::ConvBackwardFilter(op::ConvBackwardFilter {
+                settings,
+                flow,
+                image,
             }),
         )
     }

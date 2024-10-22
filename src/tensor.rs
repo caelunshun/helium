@@ -1,4 +1,5 @@
 use crate::{
+    conv::Conv2dSettings,
     data_type::{DataClassTrait, DataTypeConversion, Float},
     raw_tensor::RawTensor,
     tensor::tape::Tape,
@@ -329,6 +330,35 @@ impl<const D: usize> Tensor<D, Float> {
             |a, _b, flow| a.transpose().matmul(flow),
         )
         .checkpoint()
+    }
+
+    /// 2D batched convolution of the image `self` with filter `filter`.
+    ///
+    /// Image layout is NHWC (channels last), as opposed to torch which
+    /// uses NCHW. Filter layout is KRSC, where K is the number of output
+    /// channels and R and S the filter dimensions.
+    pub fn conv2d(&self, filter: impl AsTensor<4>, settings: Conv2dSettings) -> Self {
+        const {
+            // TODO: potentially add support for greater number of batch dimensions?
+            if D != 4 {
+                panic!("2D convolution currently requires input dimension of 4");
+            }
+        }
+
+        let input_size = [self.shape()[1], self.shape()[2]];
+
+        self.op_binary(
+            filter.as_tensor(),
+            move |image, filter| image.conv2d(filter, settings),
+            move |_, filter, flow| {
+                // Compute image gradient
+                flow.conv2d_backward_data(filter, settings, input_size)
+            },
+            move |image, _, flow| {
+                // Compute filter gradient
+                flow.conv2d_backward_filter(image, settings)
+            },
+        )
     }
 
     pub fn reduce_sum<const D2: usize>(&self, depth: u32) -> Tensor<D2> {

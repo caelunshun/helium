@@ -400,7 +400,7 @@ pub struct ConvDescriptor {
 }
 
 impl ConvDescriptor {
-    fn new(
+    pub fn new(
         compute_type: DataType,
         dims: u64,
         dilations: &[u64],

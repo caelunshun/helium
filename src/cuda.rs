@@ -47,7 +47,7 @@ impl Backend for Cuda {
                 let subgraph = OpSubgraph::from_nodes(graph, vec![node_id]);
                 Instr::PointwiseGraph(PointwiseGraph::new(subgraph))
             }
-            Op::Matmul(_) => {
+            Op::Matmul(_) | Op::Conv(_) | Op::ConvBackwardData(_) | Op::ConvBackwardFilter(_) => {
                 let subgraph = OpSubgraph::from_nodes(graph, vec![node_id]);
                 Instr::CudnnGraph(CudnnGraph::new(subgraph))
             }
