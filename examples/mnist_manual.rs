@@ -191,7 +191,6 @@ fn main() {
             loss_tx
                 .send(Box::pin(async move { loss.to_scalar_async::<f32>().await }))
                 .unwrap();
-            // println!("Training batch loss: {:.3}", loss.to_scalar::<f32>());
             println!("Latency: {:.2?}", prev.elapsed());
             prev = Instant::now();
         }

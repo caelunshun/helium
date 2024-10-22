@@ -274,6 +274,12 @@ unsafe impl Attribute for cudnnReduceTensorOp_t {
     }
 }
 
+unsafe impl Attribute for cudnnConvolutionMode_t {
+    fn attrib_type() -> cudnnBackendAttributeType_t {
+        CUDNN_TYPE_CONVOLUTION_MODE
+    }
+}
+
 pub struct TensorDescriptor(Arc<RawDescriptor>, TensorUid, TensorKind);
 
 impl TensorDescriptor {
@@ -281,6 +287,15 @@ impl TensorDescriptor {
         kind: TensorKind,
         data_type: DataType,
         shape: &Shape,
+    ) -> Result<TensorDescriptor, CudaError> {
+        Self::with_strides(kind, data_type, shape, &compute_packed_strides(shape))
+    }
+
+    pub fn with_strides(
+        kind: TensorKind,
+        data_type: DataType,
+        shape: &Shape,
+        strides: &[usize],
     ) -> Result<TensorDescriptor, CudaError> {
         let id = TensorUid::new();
 
@@ -290,7 +305,14 @@ impl TensorDescriptor {
             CUDNN_ATTR_TENSOR_DIMENSIONS,
             make_shape_vec(shape).as_slice(),
         )?;
-        desc.set_attribute_slice(CUDNN_ATTR_TENSOR_STRIDES, compute_strides(shape).as_slice())?;
+        desc.set_attribute_slice(
+            CUDNN_ATTR_TENSOR_STRIDES,
+            &strides
+                .iter()
+                .copied()
+                .map(|x| x as u64)
+                .collect::<Vec<_>>(),
+        )?;
         desc.set_attribute(CUDNN_ATTR_TENSOR_UNIQUE_ID, id.0)?;
         desc.set_attribute(CUDNN_ATTR_TENSOR_DATA_TYPE, convert_data_type(data_type))?;
         desc.set_attribute(CUDNN_ATTR_TENSOR_BYTE_ALIGNMENT, 64u64)?;
@@ -370,6 +392,172 @@ impl MatmulOpDescriptor {
             op: Arc::new(op),
             refs: vec![matrix_a.0.clone(), matrix_b.0.clone(), matrix_c.0.clone()],
         })
+    }
+}
+
+pub struct ConvDescriptor {
+    raw: Arc<RawDescriptor>,
+}
+
+impl ConvDescriptor {
+    fn new(
+        compute_type: DataType,
+        dims: u64,
+        dilations: &[u64],
+        filter_strides: &[u64],
+        paddings: &[u64],
+    ) -> Result<Self, CudaError> {
+        let mut desc = RawDescriptor::new(CUDNN_BACKEND_CONVOLUTION_DESCRIPTOR)?;
+
+        desc.set_attribute(
+            CUDNN_ATTR_CONVOLUTION_COMP_TYPE,
+            convert_data_type(compute_type),
+        )?;
+        desc.set_attribute(
+            CUDNN_ATTR_CONVOLUTION_CONV_MODE,
+            cudnnConvolutionMode_t::CUDNN_CROSS_CORRELATION,
+        )?;
+        desc.set_attribute(CUDNN_ATTR_CONVOLUTION_SPATIAL_DIMS, dims)?;
+        desc.set_attribute_slice(CUDNN_ATTR_CONVOLUTION_DILATIONS, dilations)?;
+        desc.set_attribute_slice(CUDNN_ATTR_CONVOLUTION_FILTER_STRIDES, filter_strides)?;
+        desc.set_attribute_slice(CUDNN_ATTR_CONVOLUTION_PRE_PADDINGS, paddings)?;
+        desc.set_attribute_slice(CUDNN_ATTR_CONVOLUTION_POST_PADDINGS, paddings)?;
+        desc.finalize()?;
+
+        Ok(Self {
+            raw: Arc::new(desc),
+        })
+    }
+}
+
+pub struct ConvolutionForwardOpDescriptor {
+    op: Arc<RawDescriptor>,
+    refs: Vec<Arc<RawDescriptor>>,
+}
+
+impl ConvolutionForwardOpDescriptor {
+    pub fn new(
+        conv: &ConvDescriptor,
+        filter: &TensorDescriptor,
+        image: &TensorDescriptor,
+        response: &TensorDescriptor,
+    ) -> Result<Self, CudaError> {
+        let mut op = RawDescriptor::new(CUDNN_BACKEND_OPERATION_CONVOLUTION_FORWARD_DESCRIPTOR)?;
+
+        op.set_attribute(CUDNN_ATTR_OPERATION_CONVOLUTION_FORWARD_ALPHA, 1.0f32)?;
+        op.set_attribute(CUDNN_ATTR_OPERATION_CONVOLUTION_FORWARD_BETA, 0.0f32)?;
+        op.set_attribute(
+            CUDNN_ATTR_OPERATION_CONVOLUTION_FORWARD_CONV_DESC,
+            conv.raw.desc,
+        )?;
+        op.set_attribute(CUDNN_ATTR_OPERATION_CONVOLUTION_FORWARD_X, image.0.desc)?;
+        op.set_attribute(CUDNN_ATTR_OPERATION_CONVOLUTION_FORWARD_Y, response.0.desc)?;
+        op.set_attribute(CUDNN_ATTR_OPERATION_CONVOLUTION_FORWARD_W, filter.0.desc)?;
+        op.finalize()?;
+
+        Ok(Self {
+            op: Arc::new(op),
+            refs: vec![
+                conv.raw.clone(),
+                filter.0.clone(),
+                image.0.clone(),
+                response.0.clone(),
+            ],
+        })
+    }
+}
+
+unsafe impl OpDescriptor for ConvolutionForwardOpDescriptor {
+    fn raw(&self) -> &RawDescriptor {
+        &self.op
+    }
+}
+
+pub struct ConvolutionBackwardDataDescriptor {
+    op: Arc<RawDescriptor>,
+    refs: Vec<Arc<RawDescriptor>>,
+}
+
+impl ConvolutionBackwardDataDescriptor {
+    pub fn new(
+        conv: &ConvDescriptor,
+        filter: &TensorDescriptor,
+        flow: &TensorDescriptor,
+        out: &TensorDescriptor,
+    ) -> Result<Self, CudaError> {
+        let mut op =
+            RawDescriptor::new(CUDNN_BACKEND_OPERATION_CONVOLUTION_BACKWARD_DATA_DESCRIPTOR)?;
+
+        op.set_attribute(CUDNN_ATTR_OPERATION_CONVOLUTION_BWD_DATA_ALPHA, 1.0f32)?;
+        op.set_attribute(CUDNN_ATTR_OPERATION_CONVOLUTION_BWD_DATA_BETA, 0.0f32)?;
+        op.set_attribute(
+            CUDNN_ATTR_OPERATION_CONVOLUTION_BWD_DATA_CONV_DESC,
+            conv.raw.desc,
+        )?;
+        op.set_attribute(CUDNN_ATTR_OPERATION_CONVOLUTION_BWD_DATA_W, filter.0.desc)?;
+        op.set_attribute(CUDNN_ATTR_OPERATION_CONVOLUTION_BWD_DATA_DY, flow.0.desc)?;
+        op.set_attribute(CUDNN_ATTR_OPERATION_CONVOLUTION_BWD_DATA_DX, out.0.desc)?;
+        op.finalize()?;
+
+        Ok(Self {
+            op: Arc::new(op),
+            refs: vec![
+                conv.raw.clone(),
+                filter.0.clone(),
+                flow.0.clone(),
+                out.0.clone(),
+            ],
+        })
+    }
+}
+
+unsafe impl OpDescriptor for ConvolutionBackwardDataDescriptor {
+    fn raw(&self) -> &RawDescriptor {
+        &self.op
+    }
+}
+
+pub struct ConvolutionBackwardFilterDescriptor {
+    op: Arc<RawDescriptor>,
+    refs: Vec<Arc<RawDescriptor>>,
+}
+
+impl ConvolutionBackwardFilterDescriptor {
+    pub fn new(
+        conv: &ConvDescriptor,
+        image: &TensorDescriptor,
+        flow: &TensorDescriptor,
+        out: &TensorDescriptor,
+    ) -> Result<Self, CudaError> {
+        let mut op =
+            RawDescriptor::new(CUDNN_BACKEND_OPERATION_CONVOLUTION_BACKWARD_FILTER_DESCRIPTOR)?;
+
+        op.set_attribute(CUDNN_ATTR_OPERATION_CONVOLUTION_BWD_FILTER_ALPHA, 1.0f32)?;
+        op.set_attribute(CUDNN_ATTR_OPERATION_CONVOLUTION_BWD_FILTER_BETA, 0.0f32)?;
+        op.set_attribute(
+            CUDNN_ATTR_OPERATION_CONVOLUTION_BWD_FILTER_CONV_DESC,
+            conv.raw.desc,
+        )?;
+        op.set_attribute(CUDNN_ATTR_OPERATION_CONVOLUTION_BWD_FILTER_X, image.0.desc)?;
+        op.set_attribute(CUDNN_ATTR_OPERATION_CONVOLUTION_BWD_FILTER_DY, flow.0.desc)?;
+        op.set_attribute(CUDNN_ATTR_OPERATION_CONVOLUTION_BWD_FILTER_DW, out.0.desc)?;
+        op.finalize()?;
+
+        Ok(Self {
+            op: Arc::new(op),
+            refs: vec![
+                conv.raw.clone(),
+                image.0.clone(),
+                flow.0.clone(),
+                out.0.clone(),
+            ],
+        })
+    }
+}
+
+unsafe impl OpDescriptor for ConvolutionBackwardFilterDescriptor {
+    fn raw(&self) -> &RawDescriptor {
+        &self.op
     }
 }
 
@@ -635,11 +823,6 @@ impl Engine {
         let mut refs = graph.refs.clone();
         refs.push(graph.raw.clone());
 
-        let json = plan.get_attribute_vec(CUDNN_ATTR_EXECUTION_PLAN_JSON_REPRESENTATION, || {
-            Ok(MaybeUninit::<u8>::uninit())
-        })?;
-        //println!("{}", std::str::from_utf8(&json).unwrap());
-
         Ok(Self {
             engine: Arc::new(engine),
             config: Arc::new(config),
@@ -740,12 +923,12 @@ fn make_shape_vec(shape: &Shape) -> Vec<u64> {
     shape.dims().iter().copied().map(|x| x as u64).collect()
 }
 
-fn compute_strides(shape: &Shape) -> Vec<u64> {
-    let mut strides = vec![0u64; shape.num_dims()];
+pub fn compute_packed_strides(shape: &Shape) -> Vec<usize> {
+    let mut strides = vec![0; shape.num_dims()];
     let mut product = 1;
     for (&dim, stride) in shape.dims().iter().rev().zip(&mut strides) {
         *stride = product;
-        product *= dim as u64;
+        product *= dim;
     }
     strides.reverse();
     strides
@@ -762,7 +945,7 @@ mod tests {
     #[test]
     fn test_compute_strides() {
         assert_eq!(
-            compute_strides(&Shape::new([1, 2, 3, 4])),
+            compute_packed_strides(&Shape::new([1, 2, 3, 4])),
             vec![24, 12, 4, 1],
         );
     }
@@ -887,5 +1070,59 @@ mod tests {
             .flat_map(|col| col.try_as_slice().unwrap())
             .copied()
             .collect()
+    }
+
+    #[test]
+    fn build_conv_engine() {
+        let n = 64;
+        let c = 128;
+        let h = 1024;
+        let w = 1024;
+        let k = 256;
+        let r = 3;
+        let s = 3;
+
+        let image_shape = Shape::new([n, c, h, w]);
+        let output_shape = Shape::new([n, k, h, w]);
+
+        // Set strides for NHWC in-memory layout
+        let strides = vec![c * h * w, 1, c * w, c];
+        let output_strides = vec![k * h * w, 1, k * w, k];
+
+        let image = TensorDescriptor::with_strides(
+            TensorKind::Concrete,
+            DataType::F32,
+            &image_shape,
+            &strides,
+        )
+        .unwrap();
+
+        let filter_shape = Shape::new([k, c, r, s]);
+        let filter_strides = vec![c * r * s, 1, c * s, c];
+
+        let filter = TensorDescriptor::with_strides(
+            TensorKind::Concrete,
+            DataType::F32,
+            &filter_shape,
+            &filter_strides,
+        )
+        .unwrap();
+
+        let result = TensorDescriptor::with_strides(
+            TensorKind::Concrete,
+            DataType::F32,
+            &output_shape,
+            &output_strides,
+        )
+        .unwrap();
+
+        let conv = ConvDescriptor::new(DataType::F32, 2, &[1, 1], &[1, 1], &[1, 1]).unwrap();
+        let op = ConvolutionForwardOpDescriptor::new(&conv, &filter, &image, &result).unwrap();
+
+        let graph = OperationGraph::builder()
+            .with_op(op)
+            .build(&CudnnContext::new().unwrap())
+            .unwrap();
+        Engine::choose_with_heuristic(&graph).unwrap();
     }
 }
