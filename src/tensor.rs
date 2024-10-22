@@ -359,6 +359,7 @@ impl<const D: usize> Tensor<D, Float> {
                 flow.conv2d_backward_filter(image, settings)
             },
         )
+        .checkpoint()
     }
 
     pub fn reduce_sum<const D2: usize>(&self, depth: u32) -> Tensor<D2> {
