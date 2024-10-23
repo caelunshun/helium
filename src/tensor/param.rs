@@ -33,6 +33,11 @@ impl<const D: usize> Param<D> {
         value.tape = Some(Tape::new_param(self.id, value.raw.clone()));
         self.value = value;
     }
+
+    pub fn update(&mut self, update: impl FnOnce(&Tensor<D>) -> Tensor<D>) {
+        let new = update(&self.value);
+        self.set_value(new);
+    }
 }
 
 impl<const D: usize> From<Tensor<D>> for Param<D> {

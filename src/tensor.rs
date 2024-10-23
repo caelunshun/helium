@@ -163,6 +163,14 @@ impl<const D: usize> Tensor<D, Float> {
         }
     }
 
+    pub fn detach(&self) -> Self {
+        Self {
+            tape: None,
+            raw: self.raw.clone(),
+            _class: PhantomData,
+        }
+    }
+
     /// # Panics
     /// Panics if gradient tracking is not enabled on this tensor.
     pub fn backward(&self) -> Gradients {

@@ -1083,11 +1083,11 @@ mod tests {
         let s = 3;
 
         let image_shape = Shape::new([n, c, h, w]);
-        let output_shape = Shape::new([n, k, h, w]);
+        let output_shape = Shape::new([n, k, h / 2, w / 2]);
 
         // Set strides for NHWC in-memory layout
         let strides = vec![c * h * w, 1, c * w, c];
-        let output_strides = vec![k * h * w, 1, k * w, k];
+        let output_strides = vec![k * h * w / 2 / 2, 1, k * w / 2, k];
 
         let image = TensorDescriptor::with_strides(
             TensorKind::Concrete,
@@ -1116,7 +1116,7 @@ mod tests {
         )
         .unwrap();
 
-        let conv = ConvDescriptor::new(DataType::F32, 2, &[1, 1], &[1, 1], &[1, 1]).unwrap();
+        let conv = ConvDescriptor::new(DataType::F32, 2, &[1, 1], &[2, 2], &[1, 1]).unwrap();
         let op = ConvolutionForwardOpDescriptor::new(&conv, &filter, &image, &result).unwrap();
 
         let graph = OperationGraph::builder()

@@ -9,6 +9,19 @@ pub struct Conv2dSettings {
     pub padding_mode: PaddingMode,
 }
 
+impl Default for Conv2dSettings {
+    fn default() -> Self {
+        Self {
+            in_channels: 0,
+            out_channels: 0,
+            kernel_size: [1, 1],
+            stride: [1, 1],
+            dilation: [1, 1],
+            padding_mode: PaddingMode::Same,
+        }
+    }
+}
+
 impl Conv2dSettings {
     pub fn validate(&self) {
         assert!(
@@ -51,6 +64,9 @@ impl Conv2dSettings {
             }
             PaddingMode::Same => {}
         }
+
+        size[0] /= self.stride[0];
+        size[1] /= self.stride[1];
 
         size
     }

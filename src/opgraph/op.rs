@@ -138,9 +138,9 @@ impl Op {
                     data_type: flow.data_type,
                     shape: Shape::new([
                         batch_size,
-                        op.settings.in_channels,
                         op.input_size[0],
                         op.input_size[1],
+                        op.settings.in_channels,
                     ]),
                 }
             }

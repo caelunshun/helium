@@ -1,7 +1,7 @@
 use crate::{
     backend::{Backend, BackendExt},
     conv::Conv2dSettings,
-    data_type::{DataType, DataTypeConversion, DataVec, Float},
+    data_type::{DataClass, DataType, DataTypeConversion, DataVec, Float},
     device::Device,
     opgraph::{
         op,
@@ -213,6 +213,17 @@ impl RawTensor {
         assert_eq!(filter_shape.dim_at(2), settings.kernel_size[1]);
         assert_eq!(filter_shape.dim_at(0), settings.out_channels);
         assert_eq!(filter_shape.dim_at(3), settings.in_channels);
+
+        assert_eq!(
+            filter.data_type(),
+            self.data_type(),
+            "conv2d: image and filter must have same data type"
+        );
+        assert_eq!(
+            self.data_type().class(),
+            DataClass::Float,
+            "conv2d only supports float data types"
+        );
 
         let (cx, image) = self.make_graph();
         let filter = filter.to_graph(&cx);
