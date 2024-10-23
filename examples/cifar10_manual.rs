@@ -319,7 +319,7 @@ fn main() {
             s.spawn(move || {
                 for items in training_data.chunks_exact(batch_size) {
                     let batch = Batch::new(items, device);
-                    batch_tx.send(batch).unwrap();
+                    batch_tx.send(batch).ok();
                 }
             });
 

@@ -171,8 +171,8 @@ impl KernelBuilder {
                         prec_sqrt: None,
                         prec_div: None,
                         fmad: None,
-                        //options: vec!["--device-debug".to_owned()],
-                        options: vec![],
+                        options: vec!["--device-debug".to_owned(), "--dopt=on".to_owned()],
+                        //options: vec![],
                         use_fast_math: None,
                         maxrregcount: None,
                         include_paths: vec!["/usr/local/cuda/include".to_owned()], // TODO Linux only
