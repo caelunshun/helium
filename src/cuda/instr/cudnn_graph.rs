@@ -42,8 +42,10 @@ impl CudnnGraph {
 }
 
 impl CudnnGraph {
-    pub fn precompile(&self, cx: &CudaContext) {
-        self.get_engine(cx.cudnn_handle());
+    pub fn precompile(&self, _cx: &CudaContext) {
+        // Temporarily disabled due to needing to figure out
+        // how to share cuDNN handles between threads.
+        // self.get_engine(cx.cudnn_handle());
     }
 
     fn get_engine(

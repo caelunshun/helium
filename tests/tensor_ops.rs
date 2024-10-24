@@ -388,3 +388,58 @@ fn relu() {
     let x = Tensor::<1>::from_array([-1.0, -0.5, 1.0, 0.0], DEVICE);
     assert_eq!(x.relu().to_vec::<f32>(), vec![0.0, 0.0, 1.0, 0.0]);
 }
+
+#[test]
+fn test_2d_tensor_swap() {
+    let x = Tensor::<2>::from_array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], DEVICE);
+    let result = x.swap_dims(0, 1).to_vec::<f32>();
+    assert_eq!(result, &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+}
+
+#[test]
+fn test_3d_tensor_swap() {
+    let x = Tensor::<3>::from_array([[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]]], DEVICE);
+
+    let result1 = x.swap_dims(0, 1).to_vec::<f32>();
+    assert_eq!(result1, &[1.0, 2.0, 5.0, 6.0, 3.0, 4.0, 7.0, 8.0]);
+
+    let result2 = x.swap_dims(1, 2).to_vec::<f32>();
+    assert_eq!(result2, &[1.0, 3.0, 2.0, 4.0, 5.0, 7.0, 6.0, 8.0]);
+}
+
+#[test]
+fn test_chained_swaps() {
+    let x = Tensor::<3>::from_array([[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]]], DEVICE);
+
+    let result = x
+        .swap_dims(0, 1)
+        .swap_dims(1, 2)
+        .swap_dims(0, 2)
+        .detach()
+        .to_vec::<f32>();
+    assert_eq!(result, &[1.0, 3.0, 2.0, 4.0, 5.0, 7.0, 6.0, 8.0]);
+}
+
+#[test]
+fn test_same_dimension_swap() {
+    let x = Tensor::<3>::from_array([[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]]], DEVICE);
+
+    let result = x.swap_dims(1, 1).to_vec::<f32>();
+    assert_eq!(result, &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
+}
+
+#[test]
+fn test_different_sized_dimensions() {
+    let x = Tensor::<3>::from_array([[[1.0, 2.0, 3.0]], [[4.0, 5.0, 6.0]]], DEVICE);
+
+    let result = x.swap_dims(1, 2).to_vec::<f32>();
+    assert_eq!(result, &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+}
+
+#[test]
+fn test_singleton_dimension_swap() {
+    let x = Tensor::<4>::from_array([[[[1.0], [2.0]], [[3.0], [4.0]]]], DEVICE);
+
+    let result = x.swap_dims(0, 3).to_vec::<f32>();
+    assert_eq!(result, &[1.0, 2.0, 3.0, 4.0]);
+}

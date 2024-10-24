@@ -20,7 +20,7 @@ use std::{
     cell::Cell,
     collections::hash_map::Entry,
     ffi::c_void,
-    sync::{Arc, OnceLock},
+    sync::{atomic::AtomicU64, Arc, OnceLock},
 };
 
 /// Utility to build JIT CUDA kernels from C++ source.
@@ -160,6 +160,12 @@ impl KernelBuilder {
             source,
             sm_version: target_device.sm_version(),
         };
+
+        static ID: AtomicU64 = AtomicU64::new(0);
+        let id = ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let name = format!("jit_{kernel_name}_{id}.cu");
+        //std::fs::write(format!("kernel/{name}"), key.source.as_bytes()).unwrap();
+
         match CACHE.get_or_init(Default::default).lock().entry(key) {
             Entry::Occupied(entry) => Ok(entry.get().clone()),
             Entry::Vacant(entry) => {
@@ -167,6 +173,7 @@ impl KernelBuilder {
                 let ptx = nvrtc::safe::compile_ptx_with_opts(
                     &entry.key().source,
                     nvrtc::safe::CompileOptions {
+                        name: Some(name),
                         ftz: None,
                         prec_sqrt: None,
                         prec_div: None,
@@ -251,6 +258,23 @@ impl JitKernel {
         grid_size: u32,
         block_size: u32,
     ) -> Result<(), CudaError> {
+        self.execute2d(
+            get_tensor_storage,
+            stream,
+            cx,
+            [grid_size, 1],
+            [block_size, 1],
+        )
+    }
+
+    pub fn execute2d<'a>(
+        &self,
+        get_tensor_storage: impl Fn(NodeId) -> &'a TensorStorage,
+        stream: &CudaStream,
+        cx: &CudaContext,
+        grid_size: [u32; 2],
+        block_size: [u32; 2],
+    ) -> Result<(), CudaError> {
         self.load_on_device(cx)?;
 
         let bump = Bump::new();
@@ -272,8 +296,8 @@ impl JitKernel {
                 .launch_on_stream(
                     stream.cudarc_stream(),
                     LaunchConfig {
-                        grid_dim: (grid_size, 1, 1),
-                        block_dim: (block_size, 1, 1),
+                        grid_dim: (grid_size[0], grid_size[1], 1),
+                        block_dim: (block_size[0], block_size[1], 1),
                         shared_mem_bytes: 0,
                     },
                     &mut params,

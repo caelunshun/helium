@@ -127,6 +127,7 @@ fn initial_reduction_val(op: ReduceOp) -> f32 {
 fn supports_subgraph(subgraph: &OpSubgraph) -> bool {
     let mut output_size = None;
     let mut reduction_shape = None;
+    let mut x = 0;
 
     for node in subgraph.nodes() {
         let Node::Intermediate(Intermediate { op, .. }) = subgraph.graph().get(node) else {
@@ -157,9 +158,14 @@ fn supports_subgraph(subgraph: &OpSubgraph) -> bool {
             | Op::Compare(_)
             | Op::UnaryPointwise(_)
             | Op::BinaryPointwise(_)
-            | Op::ChangeDataType(_)
-            | Op::Broadcast(_)
-            | Op::SwapDims(_) => continue,
+            | Op::ChangeDataType(_) => continue,
+            Op::Broadcast(_) => x += 1,
+            Op::SwapDims(_) => {
+                x += 1;
+                if x > 1 {
+                    return false;
+                }
+            }
             Op::Reduce(op) => {
                 if !subgraph.leafs().any(|l| l == node) {
                     // Reduction must be output

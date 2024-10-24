@@ -3,7 +3,7 @@ use crate::{
     cuda::{
         allocator::{Memory, StreamId},
         context::{CudaContext, CudaEvent, CudaStream},
-        instr::{cudnn_graph::CudnnGraph, Instr},
+        instr::{cudnn_graph::CudnnGraph, permute_dims::PermuteDims, Instr},
         tensor_storage::{TensorStorage, TensorStorageId},
     },
     data_type::{DataType, DataVec},
@@ -35,8 +35,7 @@ impl Backend for Cuda {
 
     fn make_instr_for_op(&self, op: &Op, graph: &Arc<OpGraph>, node_id: NodeId) -> Self::Instr {
         match op {
-            Op::SwapDims(_)
-            | Op::UnaryPointwise(_)
+            Op::UnaryPointwise(_)
             | Op::BinaryPointwise(_)
             | Op::ChangeDataType(_)
             | Op::Reduce(_)
@@ -50,6 +49,10 @@ impl Backend for Cuda {
             Op::Matmul(_) | Op::Conv(_) | Op::ConvBackwardData(_) | Op::ConvBackwardFilter(_) => {
                 let subgraph = OpSubgraph::from_nodes(graph, vec![node_id]);
                 Instr::CudnnGraph(CudnnGraph::new(subgraph))
+            }
+            Op::SwapDims(_) => {
+                let subgraph = OpSubgraph::from_nodes(graph, vec![node_id]);
+                Instr::PermuteDims(PermuteDims::new(subgraph))
             }
         }
     }

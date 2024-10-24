@@ -4,7 +4,7 @@ use crate::{
     cuda::{
         allocator::Memory,
         context::{CudaContext, CudaStream},
-        instr::cudnn_graph::CudnnGraph,
+        instr::{cudnn_graph::CudnnGraph, permute_dims::PermuteDims},
         Cuda,
     },
     opgraph::{NodeId, OpGraph},
@@ -13,12 +13,14 @@ use pointwise::PointwiseGraph;
 use std::sync::Arc;
 
 pub mod cudnn_graph;
+pub mod permute_dims;
 pub mod pointwise;
 
 #[derive(Debug, Clone)]
 pub enum Instr {
     CudnnGraph(CudnnGraph),
     PointwiseGraph(PointwiseGraph),
+    PermuteDims(PermuteDims),
 }
 
 impl Instr {
@@ -35,6 +37,7 @@ impl Instr {
                 instr.execute(tensors, stream, cx, hold_allocations, allocation_stream)
             }
             Instr::PointwiseGraph(instr) => instr.execute(tensors, stream, cx),
+            Instr::PermuteDims(instr) => instr.execute(tensors, stream, cx),
         }
     }
 
@@ -42,6 +45,7 @@ impl Instr {
         match self {
             Instr::CudnnGraph(instr) => instr.precompile(cx),
             Instr::PointwiseGraph(instr) => instr.precompile(cx),
+            Instr::PermuteDims(_) => {}
         }
     }
 }
@@ -51,6 +55,7 @@ impl Instruction<Cuda> for Instr {
         match self {
             Instr::CudnnGraph(instr) => instr.inputs(),
             Instr::PointwiseGraph(instr) => instr.inputs(),
+            Instr::PermuteDims(instr) => instr.inputs(),
         }
     }
 
@@ -58,6 +63,7 @@ impl Instruction<Cuda> for Instr {
         match self {
             Instr::CudnnGraph(instr) => instr.outputs(),
             Instr::PointwiseGraph(instr) => instr.outputs(),
+            Instr::PermuteDims(instr) => instr.outputs(),
         }
     }
 
@@ -67,6 +73,9 @@ impl Instruction<Cuda> for Instr {
                 instr1.can_fuse_with(instr2, op_graph)
             }
             (Instr::PointwiseGraph(instr1), Instr::PointwiseGraph(instr2)) => {
+                instr1.can_fuse_with(instr2, op_graph)
+            }
+            (Instr::PermuteDims(instr1), Instr::PermuteDims(instr2)) => {
                 instr1.can_fuse_with(instr2, op_graph)
             }
             _ => false,
@@ -81,6 +90,9 @@ impl Instruction<Cuda> for Instr {
             (Instr::PointwiseGraph(instr1), Instr::PointwiseGraph(instr2)) => {
                 Instr::PointwiseGraph(instr1.fuse_with(instr2, op_graph))
             }
+            (Instr::PermuteDims(instr1), Instr::PermuteDims(instr2)) => {
+                Instr::PermuteDims(instr1.fuse_with(instr2, op_graph))
+            }
             _ => unreachable!("can_fuse_with() is false"),
         }
     }
@@ -89,6 +101,7 @@ impl Instruction<Cuda> for Instr {
         match self {
             Instr::CudnnGraph(instr) => instr.perf(),
             Instr::PointwiseGraph(instr) => instr.perf(),
+            Instr::PermuteDims(instr) => instr.perf(),
         }
     }
 }

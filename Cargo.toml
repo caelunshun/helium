@@ -24,7 +24,8 @@ tracing = "0.1"
 profiling = "1"
 
 [dependencies.cudarc]
-version = "0.12"
+#version = "0.12"
+path = "../cudarc"
 optional = true
 default-features = false
 features = [
