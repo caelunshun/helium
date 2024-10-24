@@ -296,6 +296,11 @@ impl RawTensor {
             self.num_dims()
         );
 
+        if axis_a == axis_b {
+            // No-op.
+            return self;
+        }
+
         let (cx, this) = self.make_graph();
         Self::from_op(
             &cx,
@@ -319,10 +324,7 @@ impl RawTensor {
         if new_shape == self.shape() {
             // No need for broadcast, optimize out by returning
             // `self`.
-            return RawTensor {
-                inner: self.inner,
-                device: self.device,
-            };
+            return self;
         }
 
         assert!(
@@ -541,6 +543,12 @@ impl RawTensor {
 
     pub fn reshape(self, new_shape: impl Into<Shape>) -> RawTensor {
         let new_shape = new_shape.into();
+
+        if new_shape == self.shape() {
+            // No-op
+            return self;
+        }
+
         assert_eq!(
             self.shape().num_elements(),
             new_shape.num_elements(),
@@ -730,16 +738,36 @@ impl RawTensor {
         RawTensor::from_op(&cx, Op::UnaryPointwise(UnaryPointwise { input: this, op }))
     }
 
-    fn op_reduce(&self, op: ReduceOp, depth: u32) -> RawTensor {
+    fn op_reduce(self, op: ReduceOp, depth: u32) -> RawTensor {
+        let input_dtype = self.data_type();
+        assert_eq!(
+            input_dtype.class(),
+            DataClass::Float,
+            "reductions only supported for float types"
+        );
+
+        if depth == 0 {
+            return self;
+        }
+
+        assert!(
+            depth <= self.num_dims() as u32,
+            "reduction depth cannot exceed number of dimensions"
+        );
+
         let (cx, this) = self.make_graph();
-        RawTensor::from_op(
+        let result = RawTensor::from_op(
             &cx,
             Op::Reduce(Reduce {
                 input: this,
                 op,
                 depth,
             }),
-        )
+        );
+
+        // Internally, reductions always output in `f32` precision.
+        // Convert back to the input precision.
+        result.into_data_type(input_dtype)
     }
 
     fn make_concrete(&self) {
