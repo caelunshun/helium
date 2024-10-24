@@ -1,6 +1,10 @@
 //! Training on CIFAR-10 image classification task,
 //! with convolutional layers.
 //!
+//! Also demonstrates mixed-precision training. Model weights are
+//! stored in `f32`, but activations and gradients are computed in `bf16`
+//! which gives a ~2x speedup on Ampere and later GPUs.
+//!
 //! To download data:
 //! ```bash
 //! mkdir -p data && cd data
@@ -8,7 +12,8 @@
 //! tar -xvf cifar-10-binary.tar.gz
 //! ```
 
-use helium::{conv::Conv2dSettings, Device, Gradients, Param, Tensor};
+use half::bf16;
+use helium::{conv::Conv2dSettings, DataType, Device, Gradients, Param, Tensor};
 use rand::prelude::*;
 use rand_distr::Normal;
 use rand_pcg::Pcg64Mcg;
@@ -132,7 +137,10 @@ impl Conv {
     }
 
     pub fn forward(&self, mut x: Tensor<4>) -> Tensor<4> {
-        x = x.conv2d(&self.kernel, self.settings);
+        x = x.conv2d(
+            self.kernel.value().to_data_type(x.data_type()),
+            self.settings,
+        );
         x = &x + self.bias.value().broadcast_to(x.shape());
         x
     }
@@ -191,7 +199,7 @@ const IMAGE_CHANNELS: usize = 3;
 
 struct DataItem {
     // HWC layout
-    image: [f32; IMAGE_DIM * IMAGE_DIM * IMAGE_CHANNELS],
+    image: [bf16; IMAGE_DIM * IMAGE_DIM * IMAGE_CHANNELS],
     label: usize,
 }
 
@@ -203,12 +211,12 @@ struct Batch {
 
 impl Batch {
     pub fn new(items: &[DataItem], device: Device) -> Self {
-        let images: Vec<f32> = items.iter().flat_map(|item| item.image).collect();
-        let labels_one_hot: Vec<f32> = items
+        let images: Vec<bf16> = items.iter().flat_map(|item| item.image).collect();
+        let labels_one_hot: Vec<bf16> = items
             .iter()
             .flat_map(|item| {
-                let mut arr = [0.0f32; 10];
-                arr[item.label] = 1.0;
+                let mut arr = [bf16::ZERO; 10];
+                arr[item.label] = bf16::ONE;
                 arr
             })
             .collect();
@@ -252,7 +260,7 @@ fn load_data_file(path: &Path) -> Vec<DataItem> {
         }
 
         items.push(DataItem {
-            image: new_image.map(|x| (x as f32 / 255.0).powf(2.2)),
+            image: new_image.map(|x| bf16::from_f32((x as f32 / 255.0).powf(2.2))),
             label: label_byte[0] as usize,
         });
     }
@@ -324,7 +332,7 @@ fn main() {
             });
 
             for batch in batch_rx {
-                let logits = model.forward(batch.images);
+                let logits = model.forward(batch.images).to_data_type(DataType::F32);
                 let loss = cross_entropy_loss(logits, batch.labels);
                 let grads = loss.backward();
                 model.update_weights(&grads, lr);

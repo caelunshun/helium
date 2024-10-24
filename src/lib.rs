@@ -27,3 +27,6 @@ pub use self::{
         Tensor,
     },
 };
+/// Re-export of half-precision floating point types
+/// from the `half` crate.
+pub use half::{bf16, f16};

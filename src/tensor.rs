@@ -1,6 +1,6 @@
 use crate::{
     conv::Conv2dSettings,
-    data_type::{DataClassTrait, DataTypeConversion, Float},
+    data_type::{DataClass, DataClassTrait, DataTypeConversion, Float},
     raw_tensor::RawTensor,
     tensor::tape::Tape,
     DataType, Device, Gradients, Param,
@@ -49,6 +49,10 @@ impl<const D: usize, C: DataClassTrait> Tensor<D, C> {
 
     pub fn shape(&self) -> [usize; D] {
         self.raw.shape().dims().try_into().expect("axis mismatch?")
+    }
+
+    pub fn data_type(&self) -> DataType {
+        self.raw.data_type()
     }
 }
 
@@ -155,6 +159,19 @@ impl<const D: usize> Tensor<D, Float> {
 
     pub fn to_vec<T: DataTypeConversion<Float>>(&self) -> Vec<T> {
         self.to_vec_async().block_on()
+    }
+
+    pub fn to_data_type(&self, new_dtype: DataType) -> Self {
+        assert_eq!(
+            new_dtype.class(),
+            DataClass::Float,
+            "cannot convert from float to non-float data class"
+        );
+        let old_dtype = self.data_type();
+        self.op(
+            move |x| x.into_data_type(new_dtype),
+            move |_, flow| flow.into_data_type(old_dtype),
+        )
     }
 
     pub fn enable_grad(&mut self) {
@@ -323,7 +340,11 @@ impl<const D: usize> Tensor<D, Float> {
             |x, flow| {
                 let zero = RawTensor::from_float(0.0, x.device()).broadcast_to(x.shape());
                 let one = RawTensor::from_float(1.0, x.device()).broadcast_to(x.shape());
-                x.clone().compare_less_than(zero.clone()).select(zero, one) * flow
+                x.clone()
+                    .compare_less_than(zero.clone())
+                    .select(zero, one)
+                    .into_data_type(flow.data_type())
+                    * flow
             },
         )
     }
@@ -418,7 +439,7 @@ impl<const D: usize> Tensor<D, Float> {
 
                 let num_matching = match_mask
                     .clone()
-                    .into_data_type(DataType::F16)
+                    .into_data_type(DataType::F32)
                     .reduce_sum(depth)
                     .reshape(temp_shape)
                     .broadcast_to(shape);
