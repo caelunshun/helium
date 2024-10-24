@@ -35,7 +35,15 @@ impl Backend for Cuda {
 
     fn make_instr_for_op(&self, op: &Op, graph: &Arc<OpGraph>, node_id: NodeId) -> Self::Instr {
         match op {
-            Op::UnaryPointwise(_)
+            // Heuristic: the PermuteDims JIT kernels offer fewer fusion
+            // opportunities, but perform much better than pointwise JIT
+            // for large shapes.
+            Op::SwapDims(_) if graph.get(node_id).descriptor().shape.num_elements() > 1_000_000 => {
+                let subgraph = OpSubgraph::from_nodes(graph, vec![node_id]);
+                Instr::PermuteDims(PermuteDims::new(subgraph))
+            }
+            Op::SwapDims(_)
+            | Op::UnaryPointwise(_)
             | Op::BinaryPointwise(_)
             | Op::ChangeDataType(_)
             | Op::Reduce(_)
@@ -49,10 +57,6 @@ impl Backend for Cuda {
             Op::Matmul(_) | Op::Conv(_) | Op::ConvBackwardData(_) | Op::ConvBackwardFilter(_) => {
                 let subgraph = OpSubgraph::from_nodes(graph, vec![node_id]);
                 Instr::CudnnGraph(CudnnGraph::new(subgraph))
-            }
-            Op::SwapDims(_) => {
-                let subgraph = OpSubgraph::from_nodes(graph, vec![node_id]);
-                Instr::PermuteDims(PermuteDims::new(subgraph))
             }
         }
     }
