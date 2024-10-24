@@ -312,8 +312,8 @@ fn main() {
     let mut model = Model::new(&mut rng, device);
 
     let mut lr = 1e-1;
-    let lr_gamma = 0.975;
-    let num_epochs = 100;
+    let lr_gamma = 0.99;
+    let num_epochs = 500;
     let batch_size = 1024;
 
     training_data.shuffle(&mut rng);
@@ -350,13 +350,18 @@ fn main() {
     tracing::info!("Training complete, computing validation accuracy...");
 
     let mut num_correct = 0;
-    let validation_batch_size = 2_500;
+    let validation_batch_size = 2_000;
     for batch in validation_data.chunks(validation_batch_size) {
-        let tensor_batch = Batch::new(&batch, device);
-        let output = log_softmax(model.forward(tensor_batch.images))
-            .exp()
-            .detach()
-            .to_vec::<f32>();
+        let tensor_batch = Batch::new(batch, device);
+        let output = log_softmax(
+            model
+                .forward(tensor_batch.images)
+                .to_data_type(DataType::F32),
+        )
+        .exp()
+        .detach();
+        let output = output.to_vec::<f32>();
+        assert_eq!(output.len(), batch.len() * 10);
         for (item, probs) in batch.iter().zip(output.chunks_exact(10)) {
             let class = probs
                 .iter()
