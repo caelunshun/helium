@@ -29,75 +29,81 @@ use std::{
 
 struct Model {
     layers: Vec<Conv>,
+    batchnorms: Vec<BatchNorm>,
 }
 
 impl Model {
     pub fn new(rng: &mut impl Rng, device: Device) -> Self {
-        Self {
-            layers: vec![
-                Conv::new(
-                    Conv2dSettings {
-                        kernel_size: [3, 3],
-                        in_channels: 3,
-                        out_channels: 64,
-                        ..Default::default()
-                    },
-                    rng,
-                    device,
-                ),
-                Conv::new(
-                    Conv2dSettings {
-                        kernel_size: [3, 3],
-                        stride: [2, 2],
-                        in_channels: 64,
-                        out_channels: 128,
-                        ..Default::default()
-                    },
-                    rng,
-                    device,
-                ),
-                Conv::new(
-                    Conv2dSettings {
-                        kernel_size: [3, 3],
-                        stride: [2, 2],
-                        in_channels: 128,
-                        out_channels: 256,
-                        ..Default::default()
-                    },
-                    rng,
-                    device,
-                ),
-                Conv::new(
-                    Conv2dSettings {
-                        kernel_size: [3, 3],
-                        stride: [2, 2],
-                        in_channels: 256,
-                        out_channels: 256,
-                        ..Default::default()
-                    },
-                    rng,
-                    device,
-                ),
-                Conv::new(
-                    Conv2dSettings {
-                        kernel_size: [3, 3],
-                        stride: [1, 1],
-                        in_channels: 256,
-                        out_channels: 10,
-                        ..Default::default()
-                    },
-                    rng,
-                    device,
-                ),
-            ],
-        }
+        let layers = vec![
+            Conv::new(
+                Conv2dSettings {
+                    kernel_size: [3, 3],
+                    in_channels: 3,
+                    out_channels: 64,
+                    ..Default::default()
+                },
+                rng,
+                device,
+            ),
+            Conv::new(
+                Conv2dSettings {
+                    kernel_size: [3, 3],
+                    stride: [2, 2],
+                    in_channels: 64,
+                    out_channels: 128,
+                    ..Default::default()
+                },
+                rng,
+                device,
+            ),
+            Conv::new(
+                Conv2dSettings {
+                    kernel_size: [3, 3],
+                    stride: [2, 2],
+                    in_channels: 128,
+                    out_channels: 256,
+                    ..Default::default()
+                },
+                rng,
+                device,
+            ),
+            Conv::new(
+                Conv2dSettings {
+                    kernel_size: [3, 3],
+                    stride: [2, 2],
+                    in_channels: 256,
+                    out_channels: 256,
+                    ..Default::default()
+                },
+                rng,
+                device,
+            ),
+            Conv::new(
+                Conv2dSettings {
+                    kernel_size: [3, 3],
+                    stride: [1, 1],
+                    in_channels: 256,
+                    out_channels: 10,
+                    ..Default::default()
+                },
+                rng,
+                device,
+            ),
+        ];
+        let batchnorms = layers
+            .iter()
+            .take(layers.len() - 1)
+            .map(|layer| BatchNorm::new(layer.settings.out_channels, device))
+            .collect();
+        Self { layers, batchnorms }
     }
 
-    pub fn forward(&self, mut x: Tensor<4>) -> Tensor<2> {
+    pub fn forward(&mut self, mut x: Tensor<4>, train: bool) -> Tensor<2> {
         let [batch_size, ..] = x.shape();
         for (i, layer) in self.layers.iter().enumerate() {
             x = layer.forward(x);
             if i != self.layers.len() - 1 {
+                x = self.batchnorms[i].forward(x, train);
                 x = x.relu();
             }
         }
@@ -112,13 +118,16 @@ impl Model {
         for layer in &mut self.layers {
             layer.update_weights(grads, learning_rate);
         }
+        for bn in &mut self.batchnorms {
+            // bn.update_weights(grads, learning_rate);
+        }
     }
 }
 
 struct Conv {
     settings: Conv2dSettings,
     kernel: Param<4>,
-    bias: Param<1>,
+    bn: BatchNorm,
 }
 
 impl Conv {
@@ -132,7 +141,7 @@ impl Conv {
                 rng,
                 device,
             )),
-            bias: Param::new(init_zeros(settings.out_channels, device)),
+            bn: BatchNorm::new(settings.out_channels, device),
         }
     }
 
@@ -141,7 +150,6 @@ impl Conv {
             self.kernel.value().to_data_type(x.data_type()),
             self.settings,
         );
-        x = &x + self.bias.value().broadcast_to(x.shape());
         x
     }
 
@@ -149,6 +157,74 @@ impl Conv {
         let id = self.kernel.id();
         self.kernel
             .update(|kernel| kernel - grads.get::<4>(id) * learning_rate);
+    }
+}
+
+struct BatchNorm {
+    running_mean: Tensor<1>,
+    running_variance: Tensor<1>,
+    scale: Param<1>,
+    bias: Param<1>,
+    num_channels: usize,
+}
+
+impl BatchNorm {
+    pub fn new(num_channels: usize, device: Device) -> Self {
+        let bn = Self {
+            running_mean: Tensor::from_scalar(0.0f32, device).broadcast_to([num_channels]),
+            running_variance: Tensor::from_scalar(1.0f32, device).broadcast_to([num_channels]),
+            scale: Tensor::from_scalar(1.0f32, device)
+                .broadcast_to([num_channels])
+                .into(),
+            bias: Tensor::from_scalar(0.0f32, device)
+                .broadcast_to([num_channels])
+                .into(),
+            num_channels,
+        };
+        bn.scale.value().async_start_eval();
+        bn.bias.value().async_start_eval();
+        bn.running_mean.async_start_eval();
+        bn.running_variance.async_start_eval();
+        bn
+    }
+
+    pub fn forward(&mut self, mut x: Tensor<4>, train: bool) -> Tensor<4> {
+        let dtype = x.data_type();
+        let (mean, variance) = if train {
+            // `x` has NHWC layout, but we want to compute
+            // statistics over NHW. Swap N and C to solve.
+            let xt = x.swap_dims(0, 3);
+
+            let mean = xt.reduce_mean::<2>(3).reshape([self.num_channels]);
+            let mean_square = xt
+                .pow_scalar(2.0)
+                .reduce_mean::<2>(3)
+                .reshape([self.num_channels]);
+            let variance = mean_square - mean.pow_scalar(2.0);
+
+            //self.running_mean = &self.running_mean * 0.9 + &mean * 0.1;
+            // self.running_variance = &self.running_variance * 0.9 + &variance * 0.1;
+
+            (mean, variance)
+        } else {
+            (self.running_mean.clone(), self.running_variance.clone())
+        };
+
+        let mean_broadcast = mean.broadcast_to(x.shape());
+        let variance_broadcast = variance.broadcast_to(x.shape());
+
+        x = (x - mean_broadcast) / (variance_broadcast + 1e-3).sqrt();
+
+        let scale_broadcast = self.scale.value().broadcast_to(x.shape());
+        let bias_broadcast = self.bias.value().broadcast_to(x.shape());
+
+        (x * scale_broadcast + bias_broadcast).to_data_type(dtype)
+    }
+
+    pub fn update_weights(&mut self, grads: &Gradients, learning_rate: f32) {
+        let id = self.scale.id();
+        self.scale
+            .update(|scale| scale - grads.get::<1>(id) * learning_rate);
         let id = self.bias.id();
         self.bias
             .update(|bias| bias - grads.get::<1>(id) * learning_rate);
@@ -313,7 +389,7 @@ fn main() {
 
     let mut lr = 1e-1;
     let lr_gamma = 0.99;
-    let num_epochs = 500;
+    let num_epochs = 100;
     let batch_size = 1024;
 
     training_data.shuffle(&mut rng);
@@ -332,7 +408,9 @@ fn main() {
             });
 
             for batch in batch_rx {
-                let logits = model.forward(batch.images).to_data_type(DataType::F32);
+                let logits = model
+                    .forward(batch.images, true)
+                    .to_data_type(DataType::F32);
                 let loss = cross_entropy_loss(logits, batch.labels);
                 let grads = loss.backward();
                 model.update_weights(&grads, lr);
@@ -350,12 +428,12 @@ fn main() {
     tracing::info!("Training complete, computing validation accuracy...");
 
     let mut num_correct = 0;
-    let validation_batch_size = 2_000;
+    let validation_batch_size = 2_500;
     for batch in validation_data.chunks(validation_batch_size) {
         let tensor_batch = Batch::new(batch, device);
         let output = log_softmax(
             model
-                .forward(tensor_batch.images)
+                .forward(tensor_batch.images, false)
                 .to_data_type(DataType::F32),
         )
         .exp()
@@ -363,14 +441,14 @@ fn main() {
         let output = output.to_vec::<f32>();
         assert_eq!(output.len(), batch.len() * 10);
         for (item, probs) in batch.iter().zip(output.chunks_exact(10)) {
-            let class = probs
+            let prediction = probs
                 .iter()
                 .copied()
                 .enumerate()
                 .max_by(|(_, a), (_, b)| a.total_cmp(b))
                 .unwrap()
                 .0;
-            if class == item.label {
+            if prediction == item.label {
                 num_correct += 1;
             }
         }

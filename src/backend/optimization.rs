@@ -27,7 +27,6 @@ pub fn generate_cached_plan<B: Backend>(op_graph: &Arc<OpGraph>, backend: &B) ->
 #[profiling::function]
 fn generate_plan<B: Backend>(op_graph: &Arc<OpGraph>, backend: &B) -> Plan<B> {
     let mut graph = make_instr_graph(op_graph, backend);
-    dbg!(graph.instrs.len());
     do_fusions(&mut graph, op_graph);
     generate_plan_from_graph(graph, op_graph)
 }

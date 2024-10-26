@@ -62,3 +62,9 @@ opt-level = 1
 
 [profile.release]
 debug = true
+
+[profile.max]
+inherits = 'release'
+debug = false
+lto = 'thin'
+codegen-units = 1
