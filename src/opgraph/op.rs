@@ -134,6 +134,8 @@ impl Op {
                 let flow = get_input_descriptor(op.flow);
                 let batch_size = flow.shape.dim_at(0);
 
+                debug_assert_eq!(flow.data_type, get_input_descriptor(op.filter).data_type);
+
                 Descriptor {
                     data_type: flow.data_type,
                     shape: Shape::new([
@@ -146,6 +148,8 @@ impl Op {
             }
             Op::ConvBackwardFilter(op) => {
                 let flow = get_input_descriptor(op.flow);
+
+                debug_assert_eq!(flow.data_type, get_input_descriptor(op.image).data_type);
 
                 Descriptor {
                     data_type: flow.data_type,

@@ -2,6 +2,7 @@ use crate::{
     backend::{Backend, Instruction},
     opgraph::{Node, NodeId, OpGraph},
 };
+use ahash::{AHashMap, AHashSet};
 use lru::LruCache;
 use parking_lot::Mutex;
 use slotmap::{SecondaryMap, SlotMap};
@@ -26,6 +27,7 @@ pub fn generate_cached_plan<B: Backend>(op_graph: &Arc<OpGraph>, backend: &B) ->
 #[profiling::function]
 fn generate_plan<B: Backend>(op_graph: &Arc<OpGraph>, backend: &B) -> Plan<B> {
     let mut graph = make_instr_graph(op_graph, backend);
+    dbg!(graph.instrs.len());
     do_fusions(&mut graph, op_graph);
     generate_plan_from_graph(graph, op_graph)
 }
@@ -96,21 +98,66 @@ impl<B: Backend> Step<B> {
 /// Graph of backend instructions for optimization.
 struct InstrGraph<B: Backend> {
     instrs: SlotMap<InstrNodeId, B::Instr>,
+    producers: AHashMap<NodeId, InstrNodeId>,
+    consumers: AHashMap<NodeId, BTreeSet<InstrNodeId>>,
+
+    dependencies: SecondaryMap<InstrNodeId, BTreeSet<InstrNodeId>>,
+    dependents: SecondaryMap<InstrNodeId, BTreeSet<InstrNodeId>>,
 }
 
 impl<B: Backend> InstrGraph<B> {
     pub fn new() -> Self {
         Self {
             instrs: SlotMap::default(),
+            producers: AHashMap::default(),
+            consumers: AHashMap::default(),
+            dependencies: SecondaryMap::default(),
+            dependents: SecondaryMap::default(),
         }
     }
 
     pub fn insert(&mut self, instr: B::Instr) -> InstrNodeId {
-        self.instrs.insert(instr)
+        let inputs = instr.inputs();
+        let outputs = instr.outputs();
+
+        let id = self.instrs.insert(instr);
+
+        for input in inputs {
+            self.consumers.entry(input).or_default().insert(id);
+            if let Some(producer) = self.producers.get(&input) {
+                self.dependents[*producer].insert(id);
+            }
+        }
+        for output in outputs {
+            assert!(self.producers.insert(output, id).is_none());
+            for consumer in self.consumers.get(&output).into_iter().flatten().copied() {
+                self.dependencies[consumer].insert(id);
+            }
+        }
+
+        let dependents = self.compute_instr_dependents(id);
+        self.dependents.insert(id, dependents.collect());
+        let dependencies = self.compute_instr_dependencies(id);
+        self.dependencies.insert(id, dependencies.collect());
+
+        id
     }
 
     pub fn remove(&mut self, id: InstrNodeId) -> B::Instr {
-        self.instrs.remove(id).unwrap()
+        let instr = self.instrs.remove(id).unwrap();
+        for input in instr.inputs() {
+            self.consumers.get_mut(&input).unwrap().remove(&id);
+            if let Some(producer) = self.producers.get(&input).copied() {
+                self.dependents[producer].remove(&id);
+            }
+        }
+        for output in instr.outputs() {
+            self.producers.remove(&output).unwrap();
+            for consumer in self.consumers.get(&output).into_iter().flatten().copied() {
+                self.dependencies[consumer].remove(&id);
+            }
+        }
+        instr
     }
 
     pub fn get(&self, instr: InstrNodeId) -> &B::Instr {
@@ -118,27 +165,31 @@ impl<B: Backend> InstrGraph<B> {
     }
 
     pub fn instr_dependencies(&self, instr: InstrNodeId) -> impl Iterator<Item = InstrNodeId> + '_ {
-        // PERF: can be optimized by storing edge lists
-        let inputs = self.get(instr).inputs();
-        self.instrs.iter().filter_map(move |(id, instr)| {
-            if instr.outputs().iter().any(|o| inputs.contains(o)) {
-                Some(id)
-            } else {
-                None
-            }
-        })
+        self.dependencies[instr].iter().copied()
     }
 
     pub fn instr_dependents(&self, instr: InstrNodeId) -> impl Iterator<Item = InstrNodeId> + '_ {
-        // PERF: can be optimized by storing edge lists
-        let outputs = self.get(instr).outputs();
-        self.instrs.iter().filter_map(move |(id, instr)| {
-            if instr.inputs().iter().any(|i| outputs.contains(i)) {
-                Some(id)
-            } else {
-                None
-            }
-        })
+        self.dependents[instr].iter().copied()
+    }
+
+    fn compute_instr_dependencies(
+        &self,
+        instr: InstrNodeId,
+    ) -> impl Iterator<Item = InstrNodeId> + '_ {
+        self.get(instr)
+            .inputs()
+            .into_iter()
+            .filter_map(|id| self.producers.get(&id).copied())
+    }
+
+    fn compute_instr_dependents(
+        &self,
+        instr: InstrNodeId,
+    ) -> impl Iterator<Item = InstrNodeId> + '_ {
+        self.get(instr)
+            .outputs()
+            .into_iter()
+            .flat_map(|id| self.consumers.get(&id).into_iter().flatten().copied())
     }
 
     #[expect(unused)]
@@ -154,36 +205,48 @@ impl<B: Backend> InstrGraph<B> {
     }
 
     pub fn can_fuse_instrs(&self, a: InstrNodeId, b: InstrNodeId, op_graph: &Arc<OpGraph>) -> bool {
-        self.instrs[a].can_fuse_with(&self.instrs[b], op_graph) && self.num_paths(a, b) == 1
+        self.instrs[a].can_fuse_with(&self.instrs[b], op_graph) && !self.exist_multiple_paths(a, b)
     }
 
     #[profiling::function]
-    fn num_paths(&self, a: InstrNodeId, b: InstrNodeId) -> usize {
-        let mut count = 0;
-        let mut stack = vec![a];
+    fn exist_multiple_paths(&self, a: InstrNodeId, b: InstrNodeId) -> bool {
+        let mut stack = self
+            .instr_dependents(a)
+            .filter(|d| *d != b)
+            .collect::<Vec<_>>();
+        let mut visited = AHashSet::new();
+        visited.extend(stack.iter().copied());
         while let Some(current) = stack.pop() {
             if current == b {
-                count += 1;
-            } else {
-                stack.extend(self.instr_dependents(current));
+                return true;
             }
+            stack.extend(
+                self.instr_dependents(current)
+                    .filter(|next| visited.insert(*next)),
+            );
         }
-        count
+        false
     }
 
     /// Fuses two instructions. `b` must depend on `a`.
     ///
-    /// If no other instruction depends on `a`, then `a`
-    /// is removed from the graph and fully merged into `b`.
-    /// Otherwise, a duplicate of `a` is kept in the graph.
-    pub fn fuse_instrs(&mut self, a: InstrNodeId, b: InstrNodeId, op_graph: &Arc<OpGraph>) {
+    /// `a` and `b` are removed from the graph, producing a new instruction.
+
+    pub fn fuse_instrs(
+        &mut self,
+        a: InstrNodeId,
+        b: InstrNodeId,
+        op_graph: &Arc<OpGraph>,
+    ) -> InstrNodeId {
         debug_assert!(self.instr_dependents(a).any(|x| x == b));
         debug_assert!(self.instr_dependencies(b).any(|x| x == a));
         debug_assert!(self.get(a).can_fuse_with(self.get(b), op_graph));
 
-        let new_instr = self.get(a).fuse_with(self.get(b), op_graph);
-        self.remove(a);
-        self.instrs[b] = new_instr;
+        let a_instr = self.remove(a);
+        let b_instr = self.remove(b);
+        let new_instr = a_instr.fuse_with(&b_instr, op_graph);
+
+        self.insert(new_instr)
     }
 }
 
@@ -195,21 +258,14 @@ slotmap::new_key_type! {
 fn do_fusions<B: Backend>(graph: &mut InstrGraph<B>, op_graph: &Arc<OpGraph>) {
     let mut working_set: BTreeSet<InstrNodeId> = graph.instrs.keys().collect();
 
-    while let Some(current) = working_set.first().copied() {
-        let mut did_fuse = false;
+    while let Some(current) = working_set.pop_first() {
         for next in graph.instr_dependents(current).collect::<Vec<_>>() {
             if graph.can_fuse_instrs(current, next, op_graph) {
-                graph.fuse_instrs(current, next, op_graph);
-                if !graph.instrs.contains_key(current) {
-                    working_set.remove(&current);
-                }
-                did_fuse = true;
+                let new = graph.fuse_instrs(current, next, op_graph);
+                working_set.remove(&next);
+                working_set.insert(new);
                 break;
             }
-        }
-
-        if !did_fuse {
-            working_set.remove(&current);
         }
     }
 }

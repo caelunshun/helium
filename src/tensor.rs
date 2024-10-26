@@ -188,6 +188,11 @@ impl<const D: usize> Tensor<D, Float> {
         }
     }
 
+    pub fn checkpoint(mut self) -> Self {
+        self.tape = self.tape.map(|t| t.checkpoint(self.raw.clone()));
+        self
+    }
+
     /// # Panics
     /// Panics if gradient tracking is not enabled on this tensor.
     pub fn backward(&self) -> Gradients {
@@ -309,8 +314,14 @@ impl<const D: usize> Tensor<D, Float> {
         self.op_binary(
             power.as_tensor(),
             |a, b| a.pow(b),
-            |a, b, flow| b.clone() * a.pow(b - 1.0) * flow,
-            |a, b, flow| a.clone().pow(b) * a.log() * flow,
+            |a, b, flow| {
+                let dtype = flow.data_type();
+                (b.clone() * a.pow(b - 1.0) * flow).into_data_type(dtype)
+            },
+            |a, b, flow| {
+                let dtype = flow.data_type();
+                (a.clone().pow(b) * a.log() * flow).into_data_type(dtype)
+            },
         )
     }
 
@@ -394,12 +405,15 @@ impl<const D: usize> Tensor<D, Float> {
     pub fn reduce_sum<const D2: usize>(&self, depth: u32) -> Tensor<D2> {
         let shape = self.shape();
         let result_shape = self.raw.clone().reduce_sum(depth).shape();
+        let dtype = self.data_type();
         self.op(
             move |x| x.reduce_sum(depth),
             move |_, flow| {
                 let mut new_shape = [1usize; D];
                 new_shape[..D2].copy_from_slice(result_shape.dims());
-                flow.reshape(new_shape).broadcast_to(shape)
+                flow.reshape(new_shape)
+                    .broadcast_to(shape)
+                    .into_data_type(dtype)
             },
         )
     }
@@ -411,18 +425,21 @@ impl<const D: usize> Tensor<D, Float> {
             .copied()
             .product::<usize>();
         let result_shape = self.raw.clone().reduce_sum(depth).shape();
+        let dtype = self.data_type();
         self.op(
             move |x| x.reduce_mean(depth),
             move |_, flow| {
                 let mut new_shape = [1usize; D];
                 new_shape[..D2].copy_from_slice(result_shape.dims());
-                flow.reshape(new_shape).broadcast_to(shape) * (stride as f32).recip()
+                (flow.reshape(new_shape).broadcast_to(shape) * (stride as f32).recip())
+                    .into_data_type(dtype)
             },
         )
     }
 
     pub fn reduce_min<const D2: usize>(&self, depth: u32) -> Tensor<D2> {
         let shape = self.shape();
+        let dtype = self.data_type();
         self.op(
             move |x| x.reduce_min(depth),
             move |x, flow| {
@@ -444,16 +461,18 @@ impl<const D: usize> Tensor<D, Float> {
                     .reshape(temp_shape)
                     .broadcast_to(shape);
 
-                match_mask.select(
+                (match_mask.select(
                     num_matching.recip(),
                     RawTensor::from_float(0.0, x.device()).broadcast_to(shape),
-                ) * flow.reshape(temp_shape).broadcast_to(shape)
+                ) * flow.reshape(temp_shape).broadcast_to(shape))
+                .into_data_type(dtype)
             },
         )
     }
 
     pub fn reduce_max<const D2: usize>(&self, depth: u32) -> Tensor<D2> {
         let shape = self.shape();
+        let dtype = self.data_type();
         self.op(
             move |x| x.reduce_max(depth),
             move |x, flow| {
@@ -474,10 +493,11 @@ impl<const D: usize> Tensor<D, Float> {
                     .reshape(temp_shape)
                     .broadcast_to(shape);
 
-                match_mask.select(
+                (match_mask.select(
                     num_matching.recip(),
                     RawTensor::from_float(0.0, x.device()).broadcast_to(shape),
-                ) * flow.reshape(temp_shape).broadcast_to(shape)
+                ) * flow.reshape(temp_shape).broadcast_to(shape))
+                .into_data_type(dtype)
             },
         )
     }
@@ -568,11 +588,12 @@ impl<const D: usize, T: AsTensor<D>> Mul<T> for &'_ Tensor<D> {
     type Output = Tensor<D>;
 
     fn mul(self, rhs: T) -> Self::Output {
+        let dtype = self.data_type();
         self.op_binary(
             rhs.as_tensor(),
             |a, b| a * b,
-            |_, b, flow| b * flow,
-            |a, _, flow| a * flow,
+            move |_, b, flow| (b * flow).into_data_type(dtype),
+            move |a, _, flow| (a * flow).into_data_type(dtype),
         )
     }
 }
@@ -692,13 +713,6 @@ impl<const D: usize, C: DataClassTrait> Tensor<D, C> {
             tape,
             _class: PhantomData,
         }
-    }
-
-    /// Inserts a gradient checkpoint. Should be called after
-    /// applying any compute-bound operation, e.g. matmul.
-    fn checkpoint(mut self) -> Self {
-        self.tape = self.tape.map(|t| t.checkpoint(self.raw.clone()));
-        self
     }
 }
 
