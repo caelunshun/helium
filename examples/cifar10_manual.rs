@@ -386,7 +386,8 @@ fn main() {
     let num_epochs = 100;
     let batch_size = 1024;
 
-    let only_one_iter = true;
+    // For profiling.
+    let only_one_iter = false;
 
     training_data.shuffle(&mut rng);
 

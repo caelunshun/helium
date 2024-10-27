@@ -48,7 +48,7 @@ pub fn generate_kernel(
         // tensors over the Y dimension (max CUDA grid size is 65,535 in Y dimension).
 
         // 33 instead of 32 is intentional to reduce bank conflicts
-        __shared__ float values[33 * 32];
+        __shared__ {dtype} values[33 * 32];
         __shared__ uint32_t outIndexes[33 * 32];
 
         uint32_t dims[{num_dims}] = {dims_array};
@@ -89,9 +89,9 @@ pub fn generate_kernel(
                     outIndexes[localX + 33 * localY] = 0xFFFFFFFF;
                 }}
         
-                float val = 0;
+                {dtype} val = static_cast<{dtype}>(0);
                 if (inBounds) {{
-                    val = static_cast<float>({input}[inIndex]);
+                    val = {input}[inIndex];
                 }}
                 values[localX + 33 * localY] = val;
             }}
@@ -103,9 +103,9 @@ pub fn generate_kernel(
                 uint32_t localY = threadIdx.y + 8 * dy;
     
                 uint32_t peerOutIndex = outIndexes[localY + 33 * localX];
-                float peerOutVal = values[localY + 33 * localX];
+                {dtype} peerOutVal = values[localY + 33 * localX];
                 if (peerOutIndex < {total_count}) {{
-                    {output}[peerOutIndex] = static_cast<{dtype}>(peerOutVal);
+                    {output}[peerOutIndex] = peerOutVal;
                 }}
             }}
 
