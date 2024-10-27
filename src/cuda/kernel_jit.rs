@@ -164,7 +164,13 @@ impl KernelBuilder {
         static ID: AtomicU64 = AtomicU64::new(0);
         let id = ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let name = format!("jit_{kernel_name}_{id}.cu");
-        //std::fs::write(format!("kernel/{name}"), key.source.as_bytes()).unwrap();
+        #[cfg(feature = "cuda-debug")]
+        {
+            if !std::path::Path::new("kernel").exists() {
+                std::fs::create_dir_all("kernel").ok();
+            }
+            std::fs::write(format!("kernel/{name}"), key.source.as_bytes()).unwrap();
+        }
 
         match CACHE.get_or_init(Default::default).lock().entry(key) {
             Entry::Occupied(entry) => Ok(entry.get().clone()),

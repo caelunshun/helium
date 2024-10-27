@@ -55,6 +55,7 @@ flume = "0.11"
 default = ["cpu", "cuda"]
 cuda = ["dep:cudarc", "dep:thread_local", "dep:bumpalo", "dep:indoc"]
 cuda-tracing = []
+cuda-debug = []
 cpu = ["dep:gemm", "dep:sleef", "dep:rayon"]
 
 [profile.dev]

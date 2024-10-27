@@ -119,7 +119,7 @@ impl Model {
             layer.update_weights(grads, learning_rate);
         }
         for bn in &mut self.batchnorms {
-            // bn.update_weights(grads, learning_rate);
+            bn.update_weights(grads, learning_rate);
         }
     }
 }
@@ -127,7 +127,6 @@ impl Model {
 struct Conv {
     settings: Conv2dSettings,
     kernel: Param<4>,
-    bn: BatchNorm,
 }
 
 impl Conv {
@@ -141,7 +140,6 @@ impl Conv {
                 rng,
                 device,
             )),
-            bn: BatchNorm::new(settings.out_channels, device),
         }
     }
 
@@ -203,7 +201,7 @@ impl BatchNorm {
             let variance = mean_square - mean.pow_scalar(2.0);
 
             //self.running_mean = &self.running_mean * 0.9 + &mean * 0.1;
-            // self.running_variance = &self.running_variance * 0.9 + &variance * 0.1;
+            //self.running_variance = &self.running_variance * 0.9 + &variance * 0.1;
 
             (mean, variance)
         } else {
@@ -249,10 +247,6 @@ fn init_kaiming(
         [out_channels, kernel_size[0], kernel_size[1], in_channels],
         device,
     )
-}
-
-fn init_zeros(len: usize, device: Device) -> Tensor<1> {
-    Tensor::from_vec(vec![0.0f32; len], [len], device)
 }
 
 fn log_softmax(x: Tensor<2>) -> Tensor<2> {
@@ -392,6 +386,8 @@ fn main() {
     let num_epochs = 100;
     let batch_size = 1024;
 
+    let only_one_iter = false;
+
     training_data.shuffle(&mut rng);
 
     thread::scope(|s| {
@@ -406,24 +402,33 @@ fn main() {
                     batch_tx.send(batch).ok();
                 }
             });
-
             for batch in batch_rx {
                 let logits = model
                     .forward(batch.images, true)
                     .to_data_type(DataType::F32);
                 let loss = cross_entropy_loss(logits, batch.labels);
+                loss.async_start_eval();
                 let grads = loss.backward();
                 model.update_weights(&grads, lr);
+                model.layers[0].kernel.value().async_start_eval();
 
                 tracing::info!(
                     "Epoch {epoch}, training batch loss {:.3}",
                     loss.to_scalar::<f32>()
                 );
+
+                if only_one_iter {
+                    return;
+                }
             }
 
             lr *= lr_gamma;
         }
     });
+
+    if only_one_iter {
+        return;
+    }
 
     tracing::info!("Training complete, computing validation accuracy...");
 

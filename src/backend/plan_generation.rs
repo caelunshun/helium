@@ -335,8 +335,8 @@ fn generate_plan_from_graph<B: Backend>(mut graph: InstrGraph<B>, op_graph: &OpG
 
 /// Delays instructions in a plan as long as possible
 /// to reduce memory use.
-fn delay_computations<B: Backend>(plan: &mut Plan<B>, op_graph: &OpGraph) {
-    for i in 0..plan.steps.len() {
+fn delay_computations<B: Backend>(plan: &mut Plan<B>, _op_graph: &OpGraph) {
+    for i in (0..plan.steps.len()).rev() {
         let mut instrs = mem::take(&mut plan.steps[i].instrs);
 
         instrs.retain(|instr| {
