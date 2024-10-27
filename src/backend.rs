@@ -3,11 +3,11 @@ use crate::{
     opgraph::{op::Op, NodeId, OpGraph},
     shape::Shape,
 };
-pub use optimization::Plan;
+pub use plan_generation::Plan;
 use slotmap::SecondaryMap;
 use std::{fmt::Debug, sync::Arc};
 
-mod optimization;
+mod plan_generation;
 
 /// Trait for backends implementing tensor ops.
 pub trait Backend: Copy + Sized + Debug + Send + Sync + 'static {
@@ -43,7 +43,7 @@ pub trait BackendExt: Backend {
     ) -> SecondaryMap<NodeId, Self::TensorStorage> {
         graph.optimize();
         let graph = Arc::new(graph);
-        let plan = optimization::generate_cached_plan(&graph, self);
+        let plan = plan_generation::generate_cached_plan(&graph, self);
 
         let mut tensors = TensorMap::new(&graph, inputs);
 

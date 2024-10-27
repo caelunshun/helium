@@ -328,8 +328,45 @@ fn generate_plan_from_graph<B: Backend>(mut graph: InstrGraph<B>, op_graph: &OpG
     );
 
     let mut plan = Plan { steps };
+    delay_computations(&mut plan, op_graph);
     analyze_tensor_lifetimes(&mut plan, op_graph);
     plan
+}
+
+/// Delays instructions in a plan as long as possible
+/// to reduce memory use.
+fn delay_computations<B: Backend>(plan: &mut Plan<B>, op_graph: &OpGraph) {
+    for i in 0..plan.steps.len() {
+        let mut instrs = mem::take(&mut plan.steps[i].instrs);
+
+        instrs.retain(|instr| {
+            let outputs = instr.outputs();
+            let mut target_step = None;
+            for j in (i + 1)..plan.steps.len() {
+                if plan.steps[j]
+                    .instrs
+                    .iter()
+                    .any(|instr2| has_intersection(&instr2.inputs(), &outputs))
+                {
+                    target_step = Some(j - 1);
+                    break;
+                }
+            }
+            match target_step {
+                Some(s) if s != i => {
+                    plan.steps[s].instrs.push(instr.clone());
+                    false
+                }
+                _ => true,
+            }
+        });
+
+        plan.steps[i].instrs = instrs;
+    }
+}
+
+fn has_intersection<T: Eq>(a: &[T], b: &[T]) -> bool {
+    a.iter().any(|ai| b.iter().any(|bi| ai == bi))
 }
 
 #[profiling::function]
