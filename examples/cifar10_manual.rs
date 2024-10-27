@@ -386,7 +386,7 @@ fn main() {
     let num_epochs = 100;
     let batch_size = 1024;
 
-    let only_one_iter = false;
+    let only_one_iter = true;
 
     training_data.shuffle(&mut rng);
 

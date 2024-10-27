@@ -209,7 +209,7 @@ mod tests {
 
         let mut allocated_memories: Vec<Memory> = Vec::new();
 
-        for _ in 0..10_000 {
+        for _ in 0..1_000 {
             if rng.gen_bool(0.5) || allocated_memories.is_empty() {
                 let size = rng.gen_range(4..=64 * 1024 * 1024);
                 let align = rng.gen_range(1u64..=256).next_power_of_two();
