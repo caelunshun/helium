@@ -200,12 +200,19 @@ impl BatchNorm {
                 .reshape([self.num_channels]);
             let variance = mean_square - mean.pow_scalar(2.0);
 
-            self.running_mean = (&mean * 0.1 + &self.running_mean * 0.9).detach();
-            self.running_variance = (&variance * 0.1 + &self.running_variance).detach();
+            self.running_mean = (&self.running_mean * 0.9 + &mean * 0.1)
+                .detach()
+                .to_data_type(DataType::F32);
+            self.running_variance = (&self.running_variance * 0.9 + &variance * 0.1)
+                .detach()
+                .to_data_type(DataType::F32);
 
             (mean, variance)
         } else {
-            (self.running_mean.clone(), self.running_variance.clone())
+            (
+                self.running_mean.to_data_type(dtype),
+                self.running_variance.to_data_type(dtype),
+            )
         };
 
         let mean_broadcast = mean.broadcast_to(x.shape());
@@ -381,7 +388,7 @@ fn main() {
     let mut rng = Pcg64Mcg::seed_from_u64(3377);
     let mut model = Model::new(&mut rng, device);
 
-    let mut lr = 1e-1;
+    let mut lr = 5e-1;
     let lr_gamma = 0.99;
     let num_epochs = 100;
     let batch_size = 1024;
@@ -400,22 +407,43 @@ fn main() {
             s.spawn(move || {
                 for items in training_data.chunks_exact(batch_size) {
                     let batch = Batch::new(items, device);
-                    batch_tx.send(batch).ok();
+                    let labels = items.iter().map(|item| item.label).collect::<Vec<_>>();
+                    batch_tx.send((batch, labels)).ok();
                 }
             });
-            for batch in batch_rx {
+            for (batch, labels) in batch_rx {
                 let logits = model
                     .forward(batch.images, true)
                     .to_data_type(DataType::F32);
-                let loss = cross_entropy_loss(logits, batch.labels);
+                let loss = cross_entropy_loss(logits.clone(), batch.labels);
+                let probs = log_softmax(logits).exp();
                 loss.async_start_eval();
                 let grads = loss.backward();
                 model.update_weights(&grads, lr);
                 model.layers[0].kernel.value().async_start_eval();
 
+                let mut num_correct = 0;
+                for (label, probs) in labels
+                    .iter()
+                    .copied()
+                    .zip(probs.to_vec::<f32>().chunks_exact(10))
+                {
+                    let prediction = probs
+                        .iter()
+                        .copied()
+                        .enumerate()
+                        .max_by(|(_, a), (_, b)| a.total_cmp(b))
+                        .unwrap()
+                        .0;
+                    if prediction == label {
+                        num_correct += 1;
+                    }
+                }
+
                 tracing::info!(
-                    "Epoch {epoch}, training batch loss {:.3}",
-                    loss.to_scalar::<f32>()
+                    "Epoch {epoch}, training batch loss {:.3}, accuracy {:.2}%",
+                    loss.to_scalar::<f32>(),
+                    num_correct as f64 / batch_size as f64 * 100.0
                 );
 
                 if only_one_iter {
