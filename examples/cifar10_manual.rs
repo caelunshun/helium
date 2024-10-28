@@ -274,6 +274,7 @@ fn cross_entropy_loss(logits: Tensor<2>, targets: Tensor<2>) -> Tensor<1> {
 const IMAGE_DIM: usize = 32;
 const IMAGE_CHANNELS: usize = 3;
 
+#[derive(Debug, Clone)]
 struct DataItem {
     // HWC layout
     image: [bf16; IMAGE_DIM * IMAGE_DIM * IMAGE_CHANNELS],
@@ -344,6 +345,19 @@ fn load_data_file(path: &Path) -> Vec<DataItem> {
     items
 }
 
+fn augment_image(
+    image: &mut [bf16],
+    _height: usize,
+    _width: usize,
+    _num_channels: usize,
+    rng: &mut impl Rng,
+) {
+    let noise_distr = Normal::new(0.0f32, rng.gen_range(0.001..0.3)).unwrap();
+    for sample in image {
+        *sample = bf16::from_f32((sample.to_f32() + noise_distr.sample(rng)).clamp(0.0, 1.0));
+    }
+}
+
 const TRAINING_DATA_FILES: &[&str] = &[
     "data_batch_1.bin",
     "data_batch_2.bin",
@@ -390,7 +404,7 @@ fn main() {
 
     let mut lr = 5e-1;
     let lr_gamma = 0.99;
-    let num_epochs = 100;
+    let num_epochs = 200;
     let batch_size = 1024;
 
     // For profiling.
@@ -404,9 +418,21 @@ fn main() {
 
             let (batch_tx, batch_rx) = flume::bounded(16);
             let training_data = &training_data;
+            let mut reg_rng = Pcg64Mcg::from_rng(&mut rng).unwrap();
             s.spawn(move || {
                 for items in training_data.chunks_exact(batch_size) {
-                    let batch = Batch::new(items, device);
+                    let mut regularized_items = items.to_vec();
+                    regularized_items.iter_mut().for_each(|item| {
+                        augment_image(
+                            &mut item.image,
+                            IMAGE_DIM,
+                            IMAGE_DIM,
+                            IMAGE_CHANNELS,
+                            &mut reg_rng,
+                        )
+                    });
+
+                    let batch = Batch::new(&regularized_items, device);
                     let labels = items.iter().map(|item| item.label).collect::<Vec<_>>();
                     batch_tx.send((batch, labels)).ok();
                 }
