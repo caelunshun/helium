@@ -237,8 +237,6 @@ impl<B: Backend> InstrGraph<B> {
         b: InstrNodeId,
         op_graph: &Arc<OpGraph>,
     ) -> InstrNodeId {
-        debug_assert!(self.instr_dependents(a).any(|x| x == b));
-        debug_assert!(self.instr_dependencies(b).any(|x| x == a));
         debug_assert!(self.get(a).can_fuse_with(self.get(b), op_graph));
 
         let a_instr = self.remove(a);
@@ -257,13 +255,27 @@ slotmap::new_key_type! {
 fn do_fusions<B: Backend>(graph: &mut InstrGraph<B>, op_graph: &Arc<OpGraph>) {
     let mut working_set: BTreeSet<InstrNodeId> = graph.instrs.keys().collect();
 
-    while let Some(current) = working_set.pop_first() {
+    'outer: while let Some(current) = working_set.pop_first() {
         for next in graph.instr_dependents(current).collect::<Vec<_>>() {
             if graph.can_fuse_instrs(current, next, op_graph) {
                 let new = graph.fuse_instrs(current, next, op_graph);
                 working_set.remove(&next);
                 working_set.insert(new);
-                break;
+                continue 'outer;
+            }
+        }
+        for prev in graph.instr_dependencies(current).collect::<Vec<_>>() {
+            for sibling in graph
+                .instr_dependents(prev)
+                .filter(|id| *id != current)
+                .collect::<Vec<_>>()
+            {
+                if graph.can_fuse_instrs(current, sibling, op_graph) {
+                    let new = graph.fuse_instrs(current, sibling, op_graph);
+                    working_set.remove(&sibling);
+                    working_set.insert(new);
+                    continue 'outer;
+                }
             }
         }
     }
