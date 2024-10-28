@@ -131,7 +131,9 @@ impl<'a, B: Backend> TensorMap<'a, B> {
     }
 
     pub fn get_storage(&self, node: NodeId) -> &B::TensorStorage {
-        &self.storages[node]
+        self.storages
+            .get(node)
+            .unwrap_or_else(|| panic!("missing storage for node {node:?}"))
     }
 
     #[expect(unused)]

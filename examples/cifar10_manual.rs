@@ -200,8 +200,8 @@ impl BatchNorm {
                 .reshape([self.num_channels]);
             let variance = mean_square - mean.pow_scalar(2.0);
 
-            //self.running_mean = &self.running_mean * 0.9 + &mean * 0.1;
-            //self.running_variance = &self.running_variance * 0.9 + &variance * 0.1;
+            self.running_mean = (&mean * 0.1 + &self.running_mean * 0.9).detach();
+            self.running_variance = (&variance * 0.1 + &self.running_variance).detach();
 
             (mean, variance)
         } else {

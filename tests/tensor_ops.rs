@@ -2,7 +2,7 @@ use approx::assert_ulps_eq;
 use half::{bf16, f16};
 use helium::{
     conv::{Conv2dSettings, PaddingMode},
-    Device, Tensor,
+    Device, Param, Tensor,
 };
 
 const DEVICE: Device = Device::Cuda(0);
@@ -442,4 +442,18 @@ fn test_singleton_dimension_swap() {
 
     let result = x.swap_dims(0, 3).to_vec::<f32>();
     assert_eq!(result, &[1.0, 2.0, 3.0, 4.0]);
+}
+
+#[test]
+fn multiple_iterations() {
+    let mut mean: Tensor<1> = Tensor::<1>::from_array([1.0f32; 10], DEVICE);
+    mean = Param::new(mean).into_value();
+    for _ in 0..10 {
+        let x = Tensor::<2>::from_array([[2.0f32; 20]; 10], DEVICE);
+        let sample_mean = x.reduce_mean::<2>(1).reshape(mean.shape());
+        mean = &mean * 0.9 + &sample_mean * 0.1;
+        let y = x.pow_scalar(2.0);
+        dbg!(y.to_vec::<f32>());
+    }
+    dbg!(mean.to_vec::<f32>());
 }

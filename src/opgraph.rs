@@ -202,11 +202,11 @@ impl Debug for OpGraph {
 impl PartialEq for OpGraph {
     fn eq(&self, other: &Self) -> bool {
         self.nodes.len() == other.nodes.len()
-            && self
-                .nodes
-                .iter()
-                .zip(other.nodes.iter())
-                .all(|(a, b)| a == b)
+            && self.nodes.iter().zip(other.nodes.iter()).all(|(a, b)| {
+                a == b
+                    && self.inbound_edges(a.0) == other.inbound_edges(b.0)
+                    && self.outbound_edges(a.0) == other.outbound_edges(b.0)
+            })
     }
 }
 

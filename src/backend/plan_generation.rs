@@ -427,4 +427,33 @@ fn analyze_tensor_lifetimes<B: Backend>(plan: &mut Plan<B>, op_graph: &OpGraph) 
         .iter_mut()
         .zip(tensor_release_steps)
         .for_each(|(step, tensors)| step.tensors_to_release = tensors);
+
+    #[cfg(debug_assertions)]
+    {
+        let freed = plan
+            .steps
+            .iter()
+            .flat_map(|s| s.tensors_to_release.iter().copied())
+            .collect::<AHashSet<_>>();
+        assert!(freed
+            .iter()
+            .all(|f| !matches!(op_graph.get(*f), Node::Output(_))
+                && !op_graph
+                    .outbound_edges(*f)
+                    .iter()
+                    .any(|&b| matches!(op_graph.get(b), Node::Output(_)))));
+        let not_freed = plan
+            .steps
+            .iter()
+            .flat_map(|step| step.instrs.iter().flat_map(|instr| instr.outputs()))
+            .chain(op_graph.inputs().iter().copied())
+            .filter(|node| !freed.contains(node))
+            .collect::<AHashSet<_>>();
+        assert!(not_freed.iter().all(|id| {
+            op_graph
+                .outbound_edges(*id)
+                .iter()
+                .any(|&b| matches!(op_graph.get(b), Node::Output(_)))
+        }))
+    }
 }

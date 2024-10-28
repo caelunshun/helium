@@ -8,6 +8,7 @@ use crate::{
 use ahash::AHashMap;
 use pollster::FutureExt;
 use std::{
+    fmt::Debug,
     marker::PhantomData,
     ops::{Add, Div, Mul, Neg, Sub},
 };
@@ -37,6 +38,10 @@ impl<const D: usize, C: DataClassTrait> Tensor<D, C> {
     #[expect(unused)]
     pub(crate) fn into_raw(self) -> RawTensor {
         self.raw
+    }
+
+    pub fn is_virtual(&self) -> bool {
+        self.raw.is_virtual()
     }
 
     pub fn async_start_eval(&self) {
@@ -500,6 +505,12 @@ impl<const D: usize> Tensor<D, Float> {
                 .into_data_type(dtype)
             },
         )
+    }
+}
+
+impl<const D: usize, C: DataClassTrait> Debug for Tensor<D, C> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Tensor").field("raw", &self.raw).finish()
     }
 }
 

@@ -16,6 +16,7 @@ use crate::{
 use parking_lot::Mutex;
 use slotmap::{Key, SecondaryMap};
 use std::{
+    fmt::Debug,
     future::Future,
     ops::{Add, Div, Mul, Neg, Sub},
     pin::Pin,
@@ -32,7 +33,24 @@ pub struct RawTensor {
     device: Device,
 }
 
+impl Debug for RawTensor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.inner.lock().data {
+            Data::Virtual(data) => f
+                .debug_struct("VirtualTensor")
+                .field("node", &data.node)
+                .field("graph", &Arc::as_ptr(&data.graph))
+                .finish(),
+            Data::Concrete(_) => f.debug_struct("ConcreteTensor").finish(),
+        }
+    }
+}
+
 impl RawTensor {
+    pub fn is_virtual(&self) -> bool {
+        matches!(&self.inner.lock().data, Data::Virtual(_))
+    }
+
     pub fn async_start_eval(&self) {
         self.make_concrete();
     }
@@ -884,16 +902,16 @@ impl OpGraphBuilder {
                     virt.graph = Arc::clone(other_handle);
                     virt.node = new_node_id;
                 }
-                other
-                    .node_to_tensor
-                    .insert(new_node_id, Arc::downgrade(&tensor));
             }
+            other.node_to_tensor.insert(new_node_id, tensor.clone());
         }
 
-        for (old_input_id, tensor) in &self.inputs {
+        for (old_input_id, tensor) in self.inputs.drain() {
             let new_input_id = node_mapping[old_input_id];
-            other.inputs.insert(new_input_id, Arc::clone(tensor));
+            other.inputs.insert(new_input_id, tensor);
         }
+
+        self.node_to_tensor.clear();
     }
 
     pub fn new_input(
@@ -915,6 +933,7 @@ impl OpGraphBuilder {
     }
 
     pub fn resolve(&mut self) {
+        debug_assert!(self.op_graph.outputs().is_empty());
         // Mark tensors that are still alive as outputs.
         // This ensures these tensors are not virtualized by the backend,
         // as their data may be used later.
@@ -943,19 +962,22 @@ impl OpGraphBuilder {
                 let storages =
                     crate::cuda::Cuda.execute_graph(*device_index, self.op_graph.clone(), inputs);
                 for (node_id, storage) in storages {
-                    self.node_to_tensor[node_id]
-                        .upgrade()
-                        .expect("tensor is referenced as graph output, but no longer alive?")
-                        .lock()
-                        .data = Data::Concrete(ConcreteData::Cuda(
-                        self.op_graph.get(node_id).descriptor().shape.clone(),
-                        storage,
-                    ));
+                    if let Some(tensor) = self.node_to_tensor.get(node_id).and_then(|t| t.upgrade())
+                    {
+                        tensor.lock().data = Data::Concrete(ConcreteData::Cuda(
+                            self.op_graph.get(node_id).descriptor().shape.clone(),
+                            storage,
+                        ));
+                    } else {
+                        panic!();
+                    }
                 }
             }
             #[cfg(feature = "cpu")]
             Device::Cpu => todo!(),
         }
+
+        self.inputs.clear();
     }
 }
 
