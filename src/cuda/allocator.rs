@@ -54,7 +54,7 @@ impl CudaAllocator {
     /// with asynchronous CUDA streams, this can cause bugs as the GPU
     /// may still be using the allocated memory. In this case,
     /// use `allocate_in_stream` instead.
-    pub fn allocate(&mut self, size: u64, align: u64) -> Result<Memory, CudaError> {
+    pub fn allocate(&mut self, size: u64, align: u64) -> Result<DeviceMemory, CudaError> {
         self.allocate_internal(size, align, None)
     }
 
@@ -70,7 +70,7 @@ impl CudaAllocator {
         size: u64,
         align: u64,
         stream: StreamId,
-    ) -> Result<Memory, CudaError> {
+    ) -> Result<DeviceMemory, CudaError> {
         self.allocate_internal(size, align, Some(stream))
     }
 
@@ -94,7 +94,7 @@ impl CudaAllocator {
         size: u64,
         align: u64,
         stream: Option<StreamId>,
-    ) -> Result<Memory, CudaError> {
+    ) -> Result<DeviceMemory, CudaError> {
         assert!(size > 0);
         assert!(align > 0);
         assert!(align.is_power_of_two());
@@ -122,7 +122,7 @@ impl CudaAllocator {
         assert!(block.is_aligned_to(align));
         assert!(block.start + size <= page.size);
 
-        Ok(Memory {
+        Ok(DeviceMemory {
             ptr,
             len: size,
             block: Mutex::new(block),
@@ -151,7 +151,7 @@ impl CudaAllocator {
 
 /// An allocated region of memory. Freed
 /// automatically on drop.
-pub struct Memory {
+pub struct DeviceMemory {
     ptr: CUdeviceptr,
     len: u64,
     /// Block returned from the block allocator
@@ -159,7 +159,7 @@ pub struct Memory {
     on_drop: Arc<Mutex<Vec<Block>>>,
 }
 
-impl Memory {
+impl DeviceMemory {
     pub fn device_ptr(&self) -> CUdeviceptr {
         self.ptr
     }
@@ -173,7 +173,7 @@ impl Memory {
     }
 }
 
-impl Drop for Memory {
+impl Drop for DeviceMemory {
     fn drop(&mut self) {
         self.on_drop.lock().push(self.block.get_mut().clone());
     }
@@ -207,7 +207,7 @@ mod tests {
 
         let mut rng = Pcg64Mcg::seed_from_u64(66);
 
-        let mut allocated_memories: Vec<Memory> = Vec::new();
+        let mut allocated_memories: Vec<DeviceMemory> = Vec::new();
 
         for _ in 0..1_000 {
             if rng.gen_bool(0.5) || allocated_memories.is_empty() {

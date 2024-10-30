@@ -2,7 +2,7 @@ use super::allocator::StreamId;
 use crate::{
     backend::{InstrPerf, Instruction, TensorMap},
     cuda::{
-        allocator::Memory,
+        allocator::DeviceMemory,
         context::{CudaContext, CudaStream},
         instr::{cudnn_graph::CudnnGraph, permute_dims::PermuteDims},
         Cuda,
@@ -29,7 +29,7 @@ impl Instr {
         tensors: &TensorMap<Cuda>,
         stream: &CudaStream,
         cx: &CudaContext,
-        hold_allocations: &mut Vec<Memory>,
+        hold_allocations: &mut Vec<DeviceMemory>,
         allocation_stream: StreamId,
     ) {
         match self {

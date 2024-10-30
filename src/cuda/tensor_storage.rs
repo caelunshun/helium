@@ -1,6 +1,6 @@
 use crate::{
     cuda::{
-        allocator::{Memory, StreamId},
+        allocator::{DeviceMemory, StreamId},
         context::{CudaContext, CudaEvent, CudaStream},
         error::CudaError,
     },
@@ -25,7 +25,7 @@ impl TensorStorageId {
 
 #[derive(Clone)]
 pub struct TensorStorage {
-    memory: Arc<Memory>,
+    memory: Arc<DeviceMemory>,
     data_type: DataType,
     id: TensorStorageId,
 

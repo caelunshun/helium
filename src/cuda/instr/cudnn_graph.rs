@@ -2,7 +2,7 @@ use crate::{
     backend::{InstrPerf, Instruction, TensorMap},
     conv::Conv2dSettings,
     cuda::{
-        allocator::{Memory, StreamId},
+        allocator::{DeviceMemory, StreamId},
         context::{CudaContext, CudaStream},
         cudnn::{
             self, ConvDescriptor, ConvolutionBackwardDataDescriptor,
@@ -81,7 +81,7 @@ impl CudnnGraph {
         tensors: &TensorMap<Cuda>,
         stream: &CudaStream,
         cx: &CudaContext,
-        hold_allocations: &mut Vec<Memory>,
+        hold_allocations: &mut Vec<DeviceMemory>,
         allocation_stream: StreamId,
     ) {
         let cudnn = cx.cudnn_handle();

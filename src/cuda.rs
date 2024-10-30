@@ -1,7 +1,7 @@
 use crate::{
     backend::{Backend, Executor, Instruction, Plan, TensorMap},
     cuda::{
-        allocator::{Memory, StreamId},
+        allocator::{DeviceMemory, StreamId},
         context::{CudaContext, CudaEvent, CudaStream},
         instr::{cudnn_graph::CudnnGraph, permute_dims::PermuteDims, Instr},
         tensor_storage::{TensorStorage, TensorStorageId},
@@ -165,7 +165,7 @@ pub struct CudaExecutor {
     cx: &'static CudaContext,
     streams: &'static [CudaStream],
     sync_events: Vec<CudaEvent>,
-    hold_allocations: Vec<Memory>,
+    hold_allocations: Vec<DeviceMemory>,
     instr_index: usize,
     allocation_stream: StreamId,
     synced_tensors: AHashSet<TensorStorageId>,
