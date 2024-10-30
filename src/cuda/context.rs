@@ -1,5 +1,5 @@
 use crate::cuda::{
-    allocator::{CudaAllocator, StreamId},
+    allocator::{DeviceAllocator, StreamId},
     cudnn::CudnnContext,
     error::CudaError,
 };
@@ -29,7 +29,7 @@ use thread_local::ThreadLocal;
 /// Shared state for caching CUDA values on a particular device.
 pub struct CudaContext {
     device: Arc<CudaDevice>,
-    allocator: Mutex<CudaAllocator>,
+    allocator: Mutex<DeviceAllocator>,
     stream_pool: ThreadLocal<Vec<CudaStream>>,
     cudnn_pool: ThreadLocal<CudnnContext>,
     sm_version: u32,
@@ -68,7 +68,7 @@ impl CudaContext {
     pub fn new(device_index: u32) -> Result<Self, CudaError> {
         let device = CudaDevice::new_with_stream(device_index as usize)?;
 
-        let allocator = unsafe { CudaAllocator::new(*device.cu_primary_ctx()) };
+        let allocator = unsafe { DeviceAllocator::new(*device.cu_primary_ctx()) };
 
         let compute_major = device.attribute(CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR)?;
         let compute_minor = device.attribute(CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR)?;
@@ -110,7 +110,7 @@ impl CudaContext {
         &self.device
     }
 
-    pub fn allocator(&self) -> MutexGuard<CudaAllocator> {
+    pub fn allocator(&self) -> MutexGuard<DeviceAllocator> {
         self.allocator.lock()
     }
 

@@ -18,17 +18,17 @@ pub use block::StreamId;
 ///
 /// We use an aggressive allocator strategy that currently
 /// never returns memory to the driver.
-pub struct CudaAllocator {
+pub struct DeviceAllocator {
     context: CUcontext,
     block_allocator: BlockAllocator,
     pages: SecondaryMap<PageId, Page>,
     dropped_memories: Arc<Mutex<Vec<Block>>>,
 }
 
-unsafe impl Send for CudaAllocator {}
-unsafe impl Sync for CudaAllocator {}
+unsafe impl Send for DeviceAllocator {}
+unsafe impl Sync for DeviceAllocator {}
 
-impl CudaAllocator {
+impl DeviceAllocator {
     /// Maximum alignment that can be requested.
     pub const MAX_ALIGN: u64 = 256; // alignment of cudaMalloc
     /// Minimum size of a page. Pages can be larger to
@@ -203,7 +203,7 @@ mod tests {
     #[test]
     fn stress_test() {
         let device = CudaDevice::new(0).unwrap();
-        let mut allocator = unsafe { CudaAllocator::new(*device.cu_primary_ctx()) };
+        let mut allocator = unsafe { DeviceAllocator::new(*device.cu_primary_ctx()) };
 
         let mut rng = Pcg64Mcg::seed_from_u64(66);
 
