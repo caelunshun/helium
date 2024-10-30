@@ -249,7 +249,7 @@ fn init_kaiming(
 
     let num_elements = kernel_size[0] * kernel_size[1] * in_channels * out_channels;
     let data: Vec<f32> = (0..num_elements).map(|_| dist.sample(rng)).collect();
-    Tensor::from_vec(
+    Tensor::from_slice(
         data,
         [out_channels, kernel_size[0], kernel_size[1], in_channels],
         device,
@@ -299,12 +299,12 @@ impl Batch {
             })
             .collect();
         Batch {
-            images: Tensor::from_vec(
+            images: Tensor::from_slice(
                 images,
                 [items.len(), IMAGE_DIM, IMAGE_DIM, IMAGE_CHANNELS],
                 device,
             ),
-            labels: Tensor::from_vec(labels_one_hot, [items.len(), 10], device),
+            labels: Tensor::from_slice(labels_one_hot, [items.len(), 10], device),
         }
     }
 }

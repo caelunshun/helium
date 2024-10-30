@@ -80,5 +80,5 @@ fn random_tensor<const D: usize>(rng: &mut impl Rng, shape: [usize; D]) -> Tenso
         .map(|_| StandardNormal.sample(rng))
         .map(|x: f32| x * 0.1)
         .collect::<Vec<f32>>();
-    Tensor::from_vec(data, shape, DEVICE)
+    Tensor::from_slice(data, shape, DEVICE)
 }

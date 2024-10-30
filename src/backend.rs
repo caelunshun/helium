@@ -1,5 +1,5 @@
 use crate::{
-    data_type::{DataType, DataVec},
+    data_type::{DataSlice, DataType, DataVec},
     opgraph::{op::Op, NodeId, OpGraph},
     shape::Shape,
 };
@@ -17,12 +17,13 @@ pub trait Backend: Copy + Sized + Debug + Send + Sync + 'static {
     type Executor: Executor<Self>;
 
     fn make_instr_for_op(&self, op: &Op, graph: &Arc<OpGraph>, node_id: NodeId) -> Self::Instr;
-    fn create_tensor_with_data(&self, data: DataVec, device: Self::Device) -> Self::TensorStorage;
+    fn create_tensor_with_data(&self, data: DataSlice, device: Self::Device)
+        -> Self::TensorStorage;
     /// Asynchronously copy a tensor's data to host memory, and invoke `callback` once complete.
     fn download_tensor(
         &self,
         tensor: &Self::TensorStorage,
-        callback: impl FnOnce(DataVec) + Send + Sync + 'static,
+        callback: impl FnOnce(DataVec) + Send + 'static,
         device: Self::Device,
     );
     fn begin_execute(

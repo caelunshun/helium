@@ -1,15 +1,17 @@
 use crate::{
     cuda::{
-        allocator::{DeviceMemory, StreamId},
+        allocator::{DeviceMemory, HostPinnedAllocator, StreamId},
         context::{CudaContext, CudaEvent, CudaStream},
         error::CudaError,
     },
-    data_type::{DataType, DataVec},
+    data_type::{DataSlice, DataType, DataVec},
+    thread_pool::BlockingThreadPool,
 };
 use cudarc::{driver, driver::sys::CUdeviceptr};
 use half::{bf16, f16};
 use std::{
-    mem,
+    alloc::Layout,
+    mem, ptr, slice,
     sync::{atomic::AtomicU64, Arc},
 };
 
@@ -37,6 +39,8 @@ pub struct TensorStorage {
 }
 
 impl TensorStorage {
+    const PAGE_LOCKED_MEM_ALIGNMENT: usize = 128;
+
     pub fn new(
         data_type: DataType,
         len: usize,
@@ -74,58 +78,100 @@ impl TensorStorage {
     #[profiling::function]
     pub fn initialize_with_data(
         &self,
-        data: &DataVec,
+        data: DataSlice,
         stream: &CudaStream,
     ) -> Result<(), CudaError> {
         assert_eq!(data.as_bytes().len(), self.memory.len() as usize);
         let bytes: &[u8] = data.as_bytes();
+
+        // Copy to page-locked memory for true asynchronous transfer.
+        let page_locked = HostPinnedAllocator::global().alloc(
+            Layout::from_size_align(bytes.len(), Self::PAGE_LOCKED_MEM_ALIGNMENT).unwrap(),
+        )?;
+
+        let transfer_finished = CudaEvent::new()?;
         unsafe {
-            driver::result::memcpy_htod_async(self.device_ptr(), bytes, stream.raw() as _)?;
+            ptr::copy_nonoverlapping(bytes.as_ptr(), page_locked.as_ptr(), bytes.len());
+
+            let page_locked_slice = slice::from_raw_parts(page_locked.as_ptr(), bytes.len());
+
+            driver::result::memcpy_htod_async(
+                self.device_ptr(),
+                page_locked_slice,
+                stream.raw() as _,
+            )?;
+            transfer_finished.record(stream)?;
+
+            // The page-locked memory cannot be dropped until the transfer completes.
+            BlockingThreadPool::global().spawn(move || {
+                transfer_finished.sync().unwrap();
+                drop(page_locked);
+            });
         }
         Ok(())
     }
 
-    /// # Safety
-    /// The returned `DataVec` must live until the operation completes
-    /// in the stream.
-    pub unsafe fn async_copy_to_host(&self, stream: &CudaStream) -> Result<DataVec, CudaError> {
-        match self.data_type {
-            DataType::F16 => {
-                let mut data = vec![f16::ZERO; self.memory.len() as usize / 2];
-                unsafe {
-                    driver::result::memcpy_dtoh_async(&mut data, self.device_ptr(), stream.raw())?;
-                }
-                Ok(DataVec::F16(data))
-            }
-            DataType::Bf16 => {
-                let mut data = vec![bf16::ZERO; self.memory.len() as usize / 2];
-                unsafe {
-                    driver::result::memcpy_dtoh_async(&mut data, self.device_ptr(), stream.raw())?;
-                }
-                Ok(DataVec::Bf16(data))
-            }
-            DataType::F32 => {
-                let mut data = vec![0.0f32; self.memory.len() as usize / 4];
-                unsafe {
-                    driver::result::memcpy_dtoh_async(&mut data, self.device_ptr(), stream.raw())?;
-                }
-                Ok(DataVec::F32(data))
-            }
-            DataType::U32 => {
-                let mut data = vec![0u32; self.memory.len() as usize / 4];
-                unsafe {
-                    driver::result::memcpy_dtoh_async(&mut data, self.device_ptr(), stream.raw())?;
-                }
-                Ok(DataVec::U32(data))
-            }
-            DataType::Bool => {
-                let mut data = vec![0u32; self.memory.len() as usize / 4];
-                unsafe {
-                    driver::result::memcpy_dtoh_async(&mut data, self.device_ptr(), stream.raw())?;
-                }
-                Ok(DataVec::Bool(data))
-            }
+    pub fn async_copy_to_host(
+        &self,
+        stream: &CudaStream,
+        callback: impl FnOnce(DataVec) + Send + 'static,
+    ) -> Result<(), CudaError> {
+        // First copy to page-locked memory, then to normal Vec memory.
+        let num_bytes = usize::try_from(self.memory.len()).unwrap();
+        let page_locked = HostPinnedAllocator::global()
+            .alloc(Layout::from_size_align(num_bytes, Self::PAGE_LOCKED_MEM_ALIGNMENT).unwrap())?;
+        let transfer_event = CudaEvent::new()?;
+        unsafe {
+            let page_locked_slice = slice::from_raw_parts_mut(page_locked.as_ptr(), num_bytes);
+            driver::result::memcpy_dtoh_async(page_locked_slice, self.device_ptr(), stream.raw())?;
+            transfer_event.record(stream)?;
         }
+
+        let data_type = self.data_type;
+
+        // Tensor memory needs to stay alive until transfer completes.
+        let device_memory_handle = self.memory.clone();
+
+        BlockingThreadPool::global().spawn(move || {
+            transfer_event.sync().unwrap();
+            // Transfer now complete.
+            let bytes = unsafe { slice::from_raw_parts(page_locked.as_ptr(), num_bytes) };
+
+            let data_vec = match data_type {
+                DataType::F16 => {
+                    let mut data = vec![f16::ZERO; num_bytes / 2];
+                    data.copy_from_slice(bytemuck::cast_slice(bytes));
+                    DataVec::F16(data)
+                }
+                DataType::Bf16 => {
+                    let mut data = vec![bf16::ZERO; num_bytes / 2];
+                    data.copy_from_slice(bytemuck::cast_slice(bytes));
+                    DataVec::Bf16(data)
+                }
+                DataType::F32 => {
+                    let mut data = vec![0.0f32; num_bytes / 4];
+                    data.copy_from_slice(bytemuck::cast_slice(bytes));
+                    DataVec::F32(data)
+                }
+                DataType::U32 => {
+                    let mut data = vec![0u32; num_bytes / 4];
+                    data.copy_from_slice(bytemuck::cast_slice(bytes));
+                    DataVec::U32(data)
+                }
+                DataType::Bool => {
+                    let mut data = vec![0u32; num_bytes / 4];
+                    data.copy_from_slice(bytemuck::cast_slice(bytes));
+                    DataVec::Bool(data)
+                }
+            };
+
+            drop(page_locked);
+            drop(device_memory_handle);
+
+            callback(data_vec);
+        });
+
+        Ok(())
     }
 
     pub fn fill(&self, value: f32, stream: &CudaStream) -> Result<(), CudaError> {

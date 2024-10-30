@@ -87,7 +87,7 @@ fn cross_entropy_loss(logits: Tensor<2>, targets: Tensor<2>) -> Tensor<1> {
 }
 
 fn init_zeros(len: usize, device: Device) -> Tensor<1> {
-    Tensor::from_vec(vec![0.0f32; len], [len], device)
+    Tensor::from_slice(vec![0.0f32; len], [len], device)
 }
 
 fn init_xavier(inputs: usize, outputs: usize, rng: &mut impl Rng, device: Device) -> Tensor<2> {
@@ -95,7 +95,7 @@ fn init_xavier(inputs: usize, outputs: usize, rng: &mut impl Rng, device: Device
     let weights = (0..inputs * outputs)
         .map(|_| rng.gen_range(-x..=x))
         .collect::<Vec<_>>();
-    Tensor::from_vec(weights, [inputs, outputs], device)
+    Tensor::from_slice(weights, [inputs, outputs], device)
 }
 
 #[derive(Debug, Clone)]
@@ -176,8 +176,8 @@ fn main() {
 
             let start = Instant::now();
 
-            let input = Tensor::<2>::from_vec(input, [batch_size, 28 * 28], device);
-            let labels = Tensor::<2>::from_vec(labels, [batch_size, 10], device);
+            let input = Tensor::<2>::from_slice(input, [batch_size, 28 * 28], device);
+            let labels = Tensor::<2>::from_slice(labels, [batch_size, 10], device);
 
             let logits = model.forward(input);
             let loss = cross_entropy_loss(logits, labels);
@@ -206,7 +206,7 @@ fn main() {
         .flat_map(|item| item.image.as_slice())
         .copied()
         .collect();
-    let inputs = Tensor::from_vec(inputs, [validation_items.len(), 28 * 28], device);
+    let inputs = Tensor::from_slice(inputs, [validation_items.len(), 28 * 28], device);
 
     let outputs = log_softmax(model.forward(inputs)).exp().to_vec::<f32>();
 

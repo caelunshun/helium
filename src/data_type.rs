@@ -178,7 +178,7 @@ impl DataVec {
             DataVec::Bf16(v) => v.len(),
             DataVec::F16(v) => v.len(),
             DataVec::U32(v) => v.len(),
-            DataVec::Bool(v) => v.len() * (8 * size_of::<u32>()),
+            DataVec::Bool(v) => v.len() * u32::BITS as usize,
         }
     }
 
@@ -232,5 +232,123 @@ impl DataVec {
                 self.data_type()
             ),
         }
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum DataSlice<'a> {
+    F32(&'a [f32]),
+    Bf16(&'a [bf16]),
+    F16(&'a [f16]),
+    U32(&'a [u32]),
+    /// Packed as bitset
+    Bool(&'a [bool]),
+}
+
+impl<'a> DataSlice<'a> {
+    pub fn as_bytes(&self) -> &'a [u8] {
+        match self {
+            DataSlice::F32(v) => bytemuck::cast_slice(v),
+            DataSlice::Bf16(v) => bytemuck::cast_slice(v),
+            DataSlice::F16(v) => bytemuck::cast_slice(v),
+            DataSlice::U32(v) => bytemuck::cast_slice(v),
+            DataSlice::Bool(v) => bytemuck::cast_slice(v),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            DataSlice::F32(v) => v.len(),
+            DataSlice::Bf16(v) => v.len(),
+            DataSlice::F16(v) => v.len(),
+            DataSlice::U32(v) => v.len(),
+            DataSlice::Bool(v) => v.len() * u32::BITS as usize,
+        }
+    }
+
+    pub fn data_type(&self) -> DataType {
+        match self {
+            DataSlice::F32(_) => DataType::F32,
+            DataSlice::Bf16(_) => DataType::Bf16,
+            DataSlice::F16(_) => DataType::F16,
+            DataSlice::U32(_) => DataType::U32,
+            DataSlice::Bool(_) => DataType::Bool,
+        }
+    }
+}
+
+impl<'a> From<&'a [f32]> for DataSlice<'a> {
+    fn from(value: &'a [f32]) -> Self {
+        Self::F32(value)
+    }
+}
+
+impl<'a> From<&'a [bf16]> for DataSlice<'a> {
+    fn from(value: &'a [bf16]) -> Self {
+        Self::Bf16(value)
+    }
+}
+
+impl<'a> From<&'a [f16]> for DataSlice<'a> {
+    fn from(value: &'a [f16]) -> Self {
+        Self::F16(value)
+    }
+}
+
+impl<'a> From<&'a [u32]> for DataSlice<'a> {
+    fn from(value: &'a [u32]) -> Self {
+        Self::U32(value)
+    }
+}
+
+pub trait AsDataSlice {
+    fn as_data_slice(&self) -> DataSlice;
+}
+
+impl AsDataSlice for &'_ [f32] {
+    fn as_data_slice(&self) -> DataSlice {
+        DataSlice::F32(self)
+    }
+}
+
+impl AsDataSlice for &'_ [f16] {
+    fn as_data_slice(&self) -> DataSlice {
+        DataSlice::F16(self)
+    }
+}
+
+impl AsDataSlice for &'_ [bf16] {
+    fn as_data_slice(&self) -> DataSlice {
+        DataSlice::Bf16(self)
+    }
+}
+
+impl AsDataSlice for &'_ [u32] {
+    fn as_data_slice(&self) -> DataSlice {
+        DataSlice::U32(self)
+    }
+}
+
+impl AsDataSlice for Vec<f32> {
+    fn as_data_slice(&self) -> DataSlice {
+        DataSlice::F32(self.as_slice())
+    }
+}
+
+impl AsDataSlice for Vec<bf16> {
+    fn as_data_slice(&self) -> DataSlice {
+        DataSlice::Bf16(self.as_slice())
+    }
+}
+
+impl AsDataSlice for Vec<f16> {
+    fn as_data_slice(&self) -> DataSlice {
+        DataSlice::F16(self.as_slice())
+    }
+}
+
+impl AsDataSlice for Vec<u32> {
+    fn as_data_slice(&self) -> DataSlice {
+        DataSlice::U32(self.as_slice())
     }
 }

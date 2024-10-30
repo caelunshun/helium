@@ -9,15 +9,15 @@ const DEVICE: Device = Device::Cuda(0);
 
 #[test]
 fn upload_download() {
-    let tensor = Tensor::from_vec(vec![5.0f32; 100], [25, 4], DEVICE);
+    let tensor = Tensor::from_slice(vec![5.0f32; 100], [25, 4], DEVICE);
     assert_eq!(tensor.shape(), [25, 4]);
     assert_eq!(tensor.to_vec::<f32>(), vec![5.0f32; 100],);
 }
 
 #[test]
 fn add_simple() {
-    let a = Tensor::from_vec(vec![2.0f32; 100], [50, 2], DEVICE);
-    let b = Tensor::from_vec(vec![bf16::ONE; 100], [50, 2], DEVICE);
+    let a = Tensor::from_slice(vec![2.0f32; 100], [50, 2], DEVICE);
+    let b = Tensor::from_slice(vec![bf16::ONE; 100], [50, 2], DEVICE);
 
     let result = (a + b).to_vec::<f32>();
 
@@ -36,8 +36,8 @@ fn add_with_broadcast() {
 
 #[test]
 fn multiply() {
-    let a = Tensor::from_vec(vec![2.0f32; 100], [50, 2], DEVICE);
-    let b = Tensor::from_vec(vec![bf16::from_f32(3.0); 100], [50, 2], DEVICE);
+    let a = Tensor::from_slice(vec![2.0f32; 100], [50, 2], DEVICE);
+    let b = Tensor::from_slice(vec![bf16::from_f32(3.0); 100], [50, 2], DEVICE);
 
     let result = (a * b).to_vec::<f32>();
 
@@ -46,8 +46,8 @@ fn multiply() {
 
 #[test]
 fn divide() {
-    let a = Tensor::from_vec(vec![6.0f32; 100], [50, 2], DEVICE);
-    let b = Tensor::from_vec(vec![bf16::from_f32(2.0); 100], [50, 2], DEVICE);
+    let a = Tensor::from_slice(vec![6.0f32; 100], [50, 2], DEVICE);
+    let b = Tensor::from_slice(vec![bf16::from_f32(2.0); 100], [50, 2], DEVICE);
 
     let result = (a / b).to_vec::<f32>();
 
@@ -56,7 +56,7 @@ fn divide() {
 
 #[test]
 fn multiply_by_scalar() {
-    let a = Tensor::from_vec(vec![2.0f32; 100], [50, 2], DEVICE);
+    let a = Tensor::from_slice(vec![2.0f32; 100], [50, 2], DEVICE);
     let scalar = 3.0f32;
 
     let result = (a * scalar).to_vec::<f32>();
@@ -66,7 +66,7 @@ fn multiply_by_scalar() {
 
 #[test]
 fn divide_by_scalar() {
-    let a = Tensor::from_vec(vec![6.0f32; 100], [50, 2], DEVICE);
+    let a = Tensor::from_slice(vec![6.0f32; 100], [50, 2], DEVICE);
     let scalar = 2.0f32;
 
     let result = (a / scalar).to_vec::<f32>();
@@ -76,7 +76,7 @@ fn divide_by_scalar() {
 
 #[test]
 fn recip() {
-    let a = Tensor::from_vec(vec![2.0f32; 100], [50, 2], DEVICE);
+    let a = Tensor::from_slice(vec![2.0f32; 100], [50, 2], DEVICE);
 
     let result = a.recip().to_vec::<f32>();
 
@@ -85,10 +85,10 @@ fn recip() {
 
 #[test]
 fn complex_operation_chain() {
-    let a = Tensor::from_vec(vec![1.0f32; 100], [50, 2], DEVICE);
-    let b = Tensor::from_vec(vec![2.0f32; 100], [50, 2], DEVICE);
-    let c = Tensor::from_vec(vec![0.5f32; 100], [50, 2], DEVICE);
-    let d = Tensor::from_vec(vec![3.0f32; 100], [50, 2], DEVICE);
+    let a = Tensor::from_slice(vec![1.0f32; 100], [50, 2], DEVICE);
+    let b = Tensor::from_slice(vec![2.0f32; 100], [50, 2], DEVICE);
+    let c = Tensor::from_slice(vec![0.5f32; 100], [50, 2], DEVICE);
+    let d = Tensor::from_slice(vec![3.0f32; 100], [50, 2], DEVICE);
 
     // result = (a + b) * (c - d).recip() / 2 + a
     let result = ((a.clone() + b) * (c - d).recip() / 2.0 + a).to_vec::<f32>();
@@ -100,7 +100,7 @@ fn complex_operation_chain() {
 
 #[test]
 fn reduce_sum() {
-    let x: Tensor<2> = Tensor::from_vec(vec![10.0f32; 100], [25, 4], DEVICE);
+    let x: Tensor<2> = Tensor::from_slice(vec![10.0f32; 100], [25, 4], DEVICE);
     let sum_all: Tensor<1> = x.clone().reduce_sum(2);
     let sum_dim1: Tensor<2> = x.reduce_sum(1);
 
@@ -110,7 +110,7 @@ fn reduce_sum() {
 
 #[test]
 fn reduce_mean() {
-    let x: Tensor<2> = Tensor::from_vec(vec![10.0f32; 100], [25, 4], DEVICE);
+    let x: Tensor<2> = Tensor::from_slice(vec![10.0f32; 100], [25, 4], DEVICE);
     let mean_all: Tensor<1> = x.clone().reduce_mean(2);
     let mean_dim1: Tensor<2> = x.reduce_mean(1);
 
@@ -120,7 +120,7 @@ fn reduce_mean() {
 
 #[test]
 fn reduce_max() {
-    let x: Tensor<2> = Tensor::from_vec(
+    let x: Tensor<2> = Tensor::from_slice(
         vec![
             1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
         ],
@@ -136,7 +136,7 @@ fn reduce_max() {
 
 #[test]
 fn reduce_min() {
-    let x: Tensor<2> = Tensor::from_vec(
+    let x: Tensor<2> = Tensor::from_slice(
         vec![
             1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
         ],
@@ -159,7 +159,7 @@ fn reduce_large() {
     data.extend_from_slice(&[1.0f32; 100_000]);
     data.extend_from_slice(&[2.0f32; 100_000]);
 
-    let x = Tensor::<3>::from_vec(data, [2, 1000, 100], DEVICE);
+    let x = Tensor::<3>::from_slice(data, [2, 1000, 100], DEVICE);
 
     let sum_all = x.clone().reduce_sum::<1>(3).to_scalar::<f32>();
     let sum_partial = x.reduce_sum::<2>(2).to_vec::<f32>();
@@ -236,8 +236,8 @@ fn matmul_f16() {
 
 #[test]
 fn matmul_large_matrices() {
-    let a = Tensor::<2>::from_vec(vec![1.0f32; 10000], [100, 100], DEVICE);
-    let b = Tensor::<2>::from_vec(vec![0.5f32; 10000], [100, 100], DEVICE);
+    let a = Tensor::<2>::from_slice(vec![1.0f32; 10000], [100, 100], DEVICE);
+    let b = Tensor::<2>::from_slice(vec![0.5f32; 10000], [100, 100], DEVICE);
 
     let result = a.matmul(b).to_vec::<f32>();
 

@@ -33,7 +33,7 @@ fn main() {
 
     let weights_distr = Normal::new(0.0, 1.0).unwrap();
     let weights: Vec<f32> = (0..8).map(|_| weights_distr.sample(&mut rng)).collect();
-    let mut weights = Param::new(Tensor::<2>::from_vec(weights, [1, 8], device));
+    let mut weights = Param::new(Tensor::<2>::from_slice(weights, [1, 8], device));
 
     for _epoch in 0..50 {
         let batch_size = 1024;
@@ -41,8 +41,8 @@ fn main() {
             let input: Vec<f32> = batch.iter().flat_map(|data| data.inputs).collect();
             let target: Vec<f32> = batch.iter().map(|data| data.output).collect();
 
-            let input = Tensor::<2>::from_vec(input, [batch_size, 8], device);
-            let target = Tensor::<2>::from_vec(target, [batch_size, 1], device);
+            let input = Tensor::<2>::from_slice(input, [batch_size, 8], device);
+            let target = Tensor::<2>::from_slice(target, [batch_size, 1], device);
 
             let result = weights.value().matmul(input.transpose()).transpose();
             let loss = (result - target).pow_scalar(2.0).reduce_mean::<1>(2);

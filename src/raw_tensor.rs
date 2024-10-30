@@ -1,7 +1,7 @@
 use crate::{
     backend::{Backend, BackendExt},
     conv::Conv2dSettings,
-    data_type::{DataClass, DataType, DataTypeConversion, DataVec, Float},
+    data_type::{AsDataSlice, DataClass, DataType, DataVec},
     device::Device,
     opgraph::{
         op,
@@ -59,20 +59,24 @@ impl RawTensor {
         self.shape().num_dims()
     }
 
-    pub fn from_vec(vec: impl Into<DataVec>, shape: impl Into<Shape>, device: Device) -> Self {
-        let vec = vec.into();
+    pub fn from_slice<'a>(
+        slice: impl AsDataSlice,
+        shape: impl Into<Shape>,
+        device: Device,
+    ) -> Self {
+        let slice = slice.as_data_slice();
         let shape = shape.into();
 
-        if vec.data_type() == DataType::Bool {
+        if slice.data_type() == DataType::Bool {
             assert_eq!(
                 shape.num_elements(),
-                (vec.len() + 31) / 32 * 32,
+                (slice.len() + 31) / 32 * 32,
                 "product of tensor dimensions must equal the length of the data"
             );
         } else {
             assert_eq!(
                 shape.num_elements(),
-                vec.len(),
+                slice.len(),
                 "product of tensor dimensions must equal the length of the data"
             );
         }
@@ -82,7 +86,7 @@ impl RawTensor {
                 #[cfg(feature = "cuda")]
                 Device::Cuda(device) => ConcreteData::Cuda(
                     shape,
-                    crate::cuda::Cuda.create_tensor_with_data(vec, device),
+                    crate::cuda::Cuda.create_tensor_with_data(slice, device),
                 ),
                 #[cfg(feature = "cpu")]
                 Device::Cpu => todo!(),
@@ -92,8 +96,11 @@ impl RawTensor {
         Self { inner, device }
     }
 
-    pub fn from_float<T: DataTypeConversion<Float>>(float: T, device: Device) -> Self {
-        Self::from_vec(T::into_data_vec(vec![float]), [1], device)
+    pub fn from_scalar<T>(float: T, device: Device) -> Self
+    where
+        for<'a> &'a [T]: AsDataSlice,
+    {
+        Self::from_slice(&[float][..], [1], device)
     }
 
     pub fn into_vec(self) -> IntoVec {
@@ -396,7 +403,7 @@ impl RawTensor {
     }
 
     pub fn pow_scalar(self, power: f32) -> Self {
-        let rhs = RawTensor::from_float(power, self.device).broadcast_to(self.shape());
+        let rhs = RawTensor::from_scalar(power, self.device).broadcast_to(self.shape());
         self.pow(rhs)
     }
 
@@ -604,7 +611,7 @@ impl Add<f32> for RawTensor {
     type Output = RawTensor;
 
     fn add(self, rhs: f32) -> Self::Output {
-        let rhs = RawTensor::from_float(rhs, self.device).broadcast_to(self.shape());
+        let rhs = RawTensor::from_scalar(rhs, self.device).broadcast_to(self.shape());
         self + rhs
     }
 }
@@ -636,7 +643,7 @@ impl Mul<f32> for RawTensor {
     type Output = RawTensor;
 
     fn mul(self, rhs: f32) -> Self::Output {
-        let rhs = RawTensor::from_float(rhs, self.device).broadcast_to(self.shape());
+        let rhs = RawTensor::from_scalar(rhs, self.device).broadcast_to(self.shape());
         self * rhs
     }
 }

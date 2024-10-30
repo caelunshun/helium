@@ -1,11 +1,12 @@
 use crate::{
     conv::Conv2dSettings,
-    data_type::{DataClass, DataClassTrait, DataTypeConversion, Float},
+    data_type::{AsDataSlice, DataClass, DataClassTrait, DataTypeConversion, Float},
     raw_tensor::RawTensor,
     tensor::tape::Tape,
     DataType, Device, Gradients, Param,
 };
 use ahash::AHashMap;
+use bytemuck::Pod;
 use pollster::FutureExt;
 use std::{
     fmt::Debug,
@@ -146,16 +147,8 @@ impl<const D: usize, C: DataClassTrait> Tensor<D, C> {
 
 /// Float-only operations.
 impl<const D: usize> Tensor<D, Float> {
-    pub fn from_vec<T: DataTypeConversion<Float>>(
-        floats: impl Into<Vec<T>>,
-        shape: [usize; D],
-        device: Device,
-    ) -> Self {
-        Self::from_raw(RawTensor::from_vec(
-            T::into_data_vec(floats.into()),
-            shape,
-            device,
-        ))
+    pub fn from_slice<'a>(slice: impl AsDataSlice, shape: [usize; D], device: Device) -> Self {
+        Self::from_raw(RawTensor::from_slice(slice, shape, device))
     }
 
     pub async fn to_vec_async<T: DataTypeConversion<Float>>(&self) -> Vec<T> {
@@ -205,7 +198,7 @@ impl<const D: usize> Tensor<D, Float> {
             .tape
             .as_ref()
             .expect("called backward() on tensor that did not have gradient tracking enabled");
-        tape.backward(Tensor::<1>::from_raw(RawTensor::from_float(
+        tape.backward(Tensor::<1>::from_raw(RawTensor::from_scalar(
             1.0f32,
             self.raw.device(),
         )))
@@ -213,15 +206,18 @@ impl<const D: usize> Tensor<D, Float> {
 }
 
 impl Tensor<1, Float> {
-    pub fn from_scalar<T: DataTypeConversion<Float>>(scalar: T, device: Device) -> Self {
-        Self::from_vec(vec![scalar], [1], device)
+    pub fn from_scalar<T>(scalar: T, device: Device) -> Self
+    where
+        for<'a> &'a [T]: AsDataSlice,
+    {
+        Self::from_slice(&[scalar][..], [1], device)
     }
 
-    pub fn from_array<const N: usize, T: DataTypeConversion<Float>>(
-        array: [T; N],
-        device: Device,
-    ) -> Self {
-        Self::from_vec(array.to_vec(), [N], device)
+    pub fn from_array<const N: usize, T>(array: [T; N], device: Device) -> Self
+    where
+        for<'a> &'a [T]: AsDataSlice,
+    {
+        Self::from_slice(&array[..], [N], device)
     }
 
     pub async fn to_scalar_async<T: DataTypeConversion<Float>>(&self) -> T {
@@ -236,57 +232,41 @@ impl Tensor<1, Float> {
 }
 
 impl Tensor<2, Float> {
-    pub fn from_array<const N1: usize, const N2: usize, T: DataTypeConversion<Float>>(
+    pub fn from_array<const N1: usize, const N2: usize, T>(
         array: [[T; N2]; N1],
         device: Device,
-    ) -> Self {
-        Self::from_vec(
-            array.into_iter().flatten().collect::<Vec<T>>(),
-            [N1, N2],
-            device,
-        )
+    ) -> Self
+    where
+        for<'a> &'a [T]: AsDataSlice,
+        T: Pod,
+    {
+        Self::from_slice(bytemuck::cast_slice(&array), [N1, N2], device)
     }
 }
 
 impl Tensor<3, Float> {
-    pub fn from_array<
-        const N1: usize,
-        const N2: usize,
-        const N3: usize,
-        T: DataTypeConversion<Float>,
-    >(
+    pub fn from_array<const N1: usize, const N2: usize, const N3: usize, T>(
         array: [[[T; N3]; N2]; N1],
         device: Device,
-    ) -> Self {
-        Self::from_vec(
-            array.into_iter().flatten().flatten().collect::<Vec<T>>(),
-            [N1, N2, N3],
-            device,
-        )
+    ) -> Self
+    where
+        for<'a> &'a [T]: AsDataSlice,
+        T: Pod,
+    {
+        Self::from_slice(bytemuck::cast_slice(&array), [N1, N2, N3], device)
     }
 }
 
 impl Tensor<4, Float> {
-    pub fn from_array<
-        const N1: usize,
-        const N2: usize,
-        const N3: usize,
-        const N4: usize,
-        T: DataTypeConversion<Float>,
-    >(
+    pub fn from_array<const N1: usize, const N2: usize, const N3: usize, const N4: usize, T>(
         array: [[[[T; N4]; N3]; N2]; N1],
         device: Device,
-    ) -> Self {
-        Self::from_vec(
-            array
-                .into_iter()
-                .flatten()
-                .flatten()
-                .flatten()
-                .collect::<Vec<T>>(),
-            [N1, N2, N3, N4],
-            device,
-        )
+    ) -> Self
+    where
+        for<'a> &'a [T]: AsDataSlice,
+        T: Pod,
+    {
+        Self::from_slice(bytemuck::cast_slice(&array), [N1, N2, N3, N4], device)
     }
 }
 
@@ -354,8 +334,8 @@ impl<const D: usize> Tensor<D, Float> {
         self.op(
             |x| x.relu(),
             |x, flow| {
-                let zero = RawTensor::from_float(0.0, x.device()).broadcast_to(x.shape());
-                let one = RawTensor::from_float(1.0, x.device()).broadcast_to(x.shape());
+                let zero = RawTensor::from_scalar(0.0, x.device()).broadcast_to(x.shape());
+                let one = RawTensor::from_scalar(1.0, x.device()).broadcast_to(x.shape());
                 x.clone()
                     .compare_less_than(zero.clone())
                     .select(zero, one)
@@ -468,7 +448,7 @@ impl<const D: usize> Tensor<D, Float> {
 
                 (match_mask.select(
                     num_matching.recip(),
-                    RawTensor::from_float(0.0, x.device()).broadcast_to(shape),
+                    RawTensor::from_scalar(0.0, x.device()).broadcast_to(shape),
                 ) * flow.reshape(temp_shape).broadcast_to(shape))
                 .into_data_type(dtype)
             },
@@ -500,7 +480,7 @@ impl<const D: usize> Tensor<D, Float> {
 
                 (match_mask.select(
                     num_matching.recip(),
-                    RawTensor::from_float(0.0, x.device()).broadcast_to(shape),
+                    RawTensor::from_scalar(0.0, x.device()).broadcast_to(shape),
                 ) * flow.reshape(temp_shape).broadcast_to(shape))
                 .into_data_type(dtype)
             },

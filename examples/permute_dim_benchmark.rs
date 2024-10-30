@@ -16,7 +16,7 @@ fn main() {
     let c = 32;
     let data = vec![10.0f32; n * h * w * c];
 
-    let x = Tensor::<4>::from_vec(data, [n, h, w, c], device);
+    let x = Tensor::<4>::from_slice(data, [n, h, w, c], device);
 
     tracing::info!("Warmup");
     for _ in 0..5 {

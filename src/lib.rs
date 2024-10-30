@@ -15,6 +15,7 @@ pub mod opgraph;
 mod raw_tensor;
 mod shape;
 mod tensor;
+mod thread_pool;
 
 #[doc(inline)]
 pub use self::{

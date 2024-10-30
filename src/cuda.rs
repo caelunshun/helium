@@ -6,15 +6,13 @@ use crate::{
         instr::{cudnn_graph::CudnnGraph, permute_dims::PermuteDims, Instr},
         tensor_storage::{TensorStorage, TensorStorageId},
     },
-    data_type::{DataType, DataVec},
+    data_type::{DataSlice, DataType, DataVec},
     opgraph::{op::Op, subgraph::OpSubgraph, NodeId, OpGraph},
+    thread_pool::BlockingThreadPool,
 };
 use ahash::AHashSet;
 use instr::pointwise::PointwiseGraph;
-use std::{
-    mem,
-    sync::{Arc, OnceLock},
-};
+use std::{mem, sync::Arc};
 
 mod allocator;
 pub mod context;
@@ -61,27 +59,21 @@ impl Backend for Cuda {
         }
     }
 
-    fn create_tensor_with_data(&self, data: DataVec, device: Self::Device) -> Self::TensorStorage {
+    fn create_tensor_with_data(
+        &self,
+        data: DataSlice,
+        device: Self::Device,
+    ) -> Self::TensorStorage {
         let cx = CudaContext::global(device).expect("failed to get CUDA context");
         let tensor = TensorStorage::new(data.data_type(), data.len(), cx, None)
             .expect("failed to allocate tensor");
         tensor
-            .initialize_with_data(&data, cx.htod_stream())
+            .initialize_with_data(data, cx.htod_stream())
             .expect("failed to initialize tensor with data");
         tensor
             .ready_event()
             .record(cx.htod_stream())
             .expect("failed to record event");
-
-        let event = tensor.ready_event().clone();
-
-        // `data` needs to live until the transfer completes.
-        // for now, we implement this by dropping the vec
-        // on a thread once the event completes.
-        blocking_pool().spawn(move || {
-            event.sync().expect("failed to sync on event");
-            drop(data);
-        });
 
         tensor
     }
@@ -89,33 +81,18 @@ impl Backend for Cuda {
     fn download_tensor(
         &self,
         tensor: &Self::TensorStorage,
-        callback: impl FnOnce(DataVec) + Send + Sync + 'static,
+        callback: impl FnOnce(DataVec) + Send + 'static,
         device: Self::Device,
     ) {
         let cx = CudaContext::global(device).expect("failed to get CUDA context");
-        let event = CudaEvent::new().expect("failed to create CUDA event");
-
         tensor
             .ready_event()
             .wait(cx.dtoh_stream())
             .expect("failed to wait event");
-        let data = unsafe {
-            tensor
-                .async_copy_to_host(cx.dtoh_stream())
-                .expect("failed to copy tensor to host")
-        };
-        event
-            .record(cx.dtoh_stream())
-            .expect("failed to record event");
 
-        // Keep tensor alive until download completes
-        let tensor_clone = tensor.clone();
-
-        blocking_pool().spawn(move || {
-            event.sync().expect("failed to sync event");
-            callback(data);
-            drop(tensor_clone);
-        });
+        tensor
+            .async_copy_to_host(cx.dtoh_stream(), callback)
+            .expect("failed to perform tensor device=>host copy");
     }
 
     fn begin_execute(
@@ -256,7 +233,7 @@ impl Drop for CudaExecutor {
         {
             let stop = self.stop.clone();
             let start = self.start.clone();
-            blocking_pool().spawn(move || {
+            BlockingThreadPool::global().spawn(move || {
                 let time_elapsed = stop.measure_time_elapsed(&start).unwrap();
                 tracing::debug!("GPU execution time: {time_elapsed:.2?}");
             });
@@ -269,7 +246,7 @@ impl Drop for CudaExecutor {
         let cx = self.cx;
         let allocation_stream = self.allocation_stream;
         let sync_events = mem::take(&mut self.sync_events);
-        blocking_pool().spawn(move || {
+        BlockingThreadPool::global().spawn(move || {
             for event in sync_events {
                 event.sync().unwrap();
             }
@@ -286,10 +263,4 @@ fn parallel_compile_kernels(plan: &Plan<Cuda>, cx: &CudaContext) {
         .for_each(|instr| {
             instr.precompile(cx);
         });
-}
-
-/// Thread pool for blocking operations.
-fn blocking_pool() -> &'static rayon::ThreadPool {
-    static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
-    POOL.get_or_init(|| rayon::ThreadPoolBuilder::new().build().unwrap())
 }

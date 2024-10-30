@@ -63,9 +63,9 @@ fn reduce_sum_mean() {
 
 #[test]
 fn broadcast() {
-    let param = Param::new(Tensor::<2>::from_vec(vec![1.0f32; 20], [20, 1], DEVICE));
+    let param = Param::new(Tensor::<2>::from_slice(vec![1.0f32; 20], [20, 1], DEVICE));
 
-    let x = Tensor::<3>::from_vec(vec![2.0f32; 80], [2, 20, 2], DEVICE);
+    let x = Tensor::<3>::from_slice(vec![2.0f32; 80], [2, 20, 2], DEVICE);
 
     let y = (param.value().broadcast_to(x.shape()) * x).reduce_sum::<1>(3);
 
