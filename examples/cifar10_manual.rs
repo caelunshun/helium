@@ -437,7 +437,41 @@ fn main() {
                     batch_tx.send((batch, labels)).ok();
                 }
             });
+
+            let (result_tx, result_rx) = flume::bounded::<(Vec<usize>, Tensor<2>, Tensor<1>)>(1);
+            let thread = s.spawn(move || {
+                for (labels, probs, loss) in result_rx {
+                    let mut num_correct = 0;
+                    for (label, probs) in labels
+                        .iter()
+                        .copied()
+                        .zip(probs.to_vec::<f32>().chunks_exact(10))
+                    {
+                        let prediction = probs
+                            .iter()
+                            .copied()
+                            .enumerate()
+                            .max_by(|(_, a), (_, b)| a.total_cmp(b))
+                            .unwrap()
+                            .0;
+                        if prediction == label {
+                            num_correct += 1;
+                        }
+                    }
+
+                    tracing::info!(
+                        "Epoch {epoch}, training batch loss {:.3}, accuracy {:.2}%",
+                        loss.to_scalar::<f32>(),
+                        num_correct as f64 / batch_size as f64 * 100.0
+                    );
+                }
+            });
+
+            let epoch_start = Instant::now();
+
+            let mut num_batches = 0;
             for (batch, labels) in batch_rx {
+                let start = Instant::now();
                 let logits = model
                     .forward(batch.images, true)
                     .to_data_type(DataType::F32);
@@ -447,30 +481,11 @@ fn main() {
                 let grads = loss.backward();
                 model.update_weights(&grads, lr);
                 model.layers[0].kernel.value().async_start_eval();
+                tracing::debug!("Batch recorded in {:.2?}", start.elapsed());
 
-                let mut num_correct = 0;
-                for (label, probs) in labels
-                    .iter()
-                    .copied()
-                    .zip(probs.to_vec::<f32>().chunks_exact(10))
-                {
-                    let prediction = probs
-                        .iter()
-                        .copied()
-                        .enumerate()
-                        .max_by(|(_, a), (_, b)| a.total_cmp(b))
-                        .unwrap()
-                        .0;
-                    if prediction == label {
-                        num_correct += 1;
-                    }
-                }
+                result_tx.send((labels, probs, loss)).unwrap();
 
-                tracing::info!(
-                    "Epoch {epoch}, training batch loss {:.3}, accuracy {:.2}%",
-                    loss.to_scalar::<f32>(),
-                    num_correct as f64 / batch_size as f64 * 100.0
-                );
+                num_batches += 1;
 
                 if only_one_iter {
                     return;
@@ -478,6 +493,12 @@ fn main() {
             }
 
             lr *= lr_gamma;
+
+            drop(result_tx);
+            thread.join().unwrap();
+
+            let time = epoch_start.elapsed();
+            tracing::info!("Epoch cost average of {:.2?}/batch", time / num_batches);
         }
     });
 

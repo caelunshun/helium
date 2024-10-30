@@ -155,8 +155,8 @@ impl Backend for Cuda {
             allocation_stream,
             synced_tensors: AHashSet::new(),
             synced_tensors_this_step: Vec::new(),
-            start,
-            stop,
+            start: Arc::new(start),
+            stop: Arc::new(stop),
         }
     }
 }
@@ -173,8 +173,8 @@ pub struct CudaExecutor {
 
     /// Events used for profiling.
     #[cfg_attr(not(feature = "cuda-tracing"), expect(unused))]
-    start: CudaEvent,
-    stop: CudaEvent,
+    start: Arc<CudaEvent>,
+    stop: Arc<CudaEvent>,
 }
 
 impl Executor<Cuda> for CudaExecutor {
@@ -254,8 +254,12 @@ impl Drop for CudaExecutor {
             .expect("failed to record stop event");
         #[cfg(feature = "cuda-tracing")]
         {
-            let time_elapsed = self.stop.measure_time_elapsed(&self.start).unwrap();
-            tracing::debug!("GPU execution time: {time_elapsed:.2?}");
+            let stop = self.stop.clone();
+            let start = self.start.clone();
+            blocking_pool().spawn(move || {
+                let time_elapsed = stop.measure_time_elapsed(&start).unwrap();
+                tracing::debug!("GPU execution time: {time_elapsed:.2?}");
+            });
         }
 
         self.hold_allocations.clear();

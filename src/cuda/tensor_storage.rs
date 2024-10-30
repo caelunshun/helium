@@ -71,6 +71,7 @@ impl TensorStorage {
         self.id
     }
 
+    #[profiling::function]
     pub fn initialize_with_data(
         &self,
         data: &DataVec,
