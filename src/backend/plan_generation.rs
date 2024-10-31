@@ -1,27 +1,21 @@
 use crate::{
     backend::{Backend, Instruction},
+    cache::Cache,
     opgraph::{Node, NodeId, OpGraph},
 };
 use ahash::{AHashMap, AHashSet};
-use lru::LruCache;
-use parking_lot::Mutex;
 use slotmap::{SecondaryMap, SlotMap};
 use std::{
     any::{Any, TypeId},
     collections::BTreeSet,
     mem,
-    num::NonZeroUsize,
-    sync::{Arc, OnceLock},
+    sync::Arc,
 };
 
 #[profiling::function]
-pub fn generate_cached_plan<B: Backend>(op_graph: &Arc<OpGraph>, backend: &B) -> Plan<B> {
-    static CACHE: OnceLock<Mutex<PlanCache>> = OnceLock::new();
-
-    CACHE
-        .get_or_init(Default::default)
-        .lock()
-        .get_or_insert(op_graph, backend)
+pub fn generate_cached_plan<B: Backend>(op_graph: &Arc<OpGraph>, backend: &B) -> Arc<Plan<B>> {
+    static CACHE: PlanCache = PlanCache::new();
+    CACHE.get_or_insert(op_graph, backend)
 }
 
 #[profiling::function]
@@ -33,30 +27,25 @@ fn generate_plan<B: Backend>(op_graph: &Arc<OpGraph>, backend: &B) -> Plan<B> {
 
 /// Caches plans by backend type ID + op graph.
 struct PlanCache {
-    cache: LruCache<(Arc<OpGraph>, TypeId), Box<dyn Any + Send + Sync>, ahash::RandomState>,
-}
-
-impl Default for PlanCache {
-    fn default() -> Self {
-        static CAPACITY: usize = 256;
-        Self {
-            cache: LruCache::with_hasher(
-                NonZeroUsize::new(CAPACITY).unwrap(),
-                ahash::RandomState::new(),
-            ),
-        }
-    }
+    cache: Cache<(Arc<OpGraph>, TypeId), Arc<dyn Any + Send + Sync>>,
 }
 
 impl PlanCache {
-    pub fn get_or_insert<B: Backend>(&mut self, graph: &Arc<OpGraph>, backend: &B) -> Plan<B> {
-        self.cache
-            .get_or_insert((graph.clone(), TypeId::of::<B>()), || {
-                Box::new(generate_plan(graph, backend))
-            })
-            .downcast_ref::<Plan<B>>()
-            .unwrap()
-            .clone()
+    pub const fn new() -> Self {
+        Self {
+            cache: Cache::with_capacity(256),
+        }
+    }
+
+    pub fn get_or_insert<B: Backend>(&self, graph: &Arc<OpGraph>, backend: &B) -> Arc<Plan<B>> {
+        Arc::downcast(
+            self.cache
+                .get_or_insert(&(graph.clone(), TypeId::of::<B>()), || {
+                    Arc::new(generate_plan(graph, backend))
+                }),
+        )
+        .ok()
+        .unwrap()
     }
 }
 

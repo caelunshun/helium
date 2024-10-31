@@ -1,5 +1,6 @@
 use crate::{
     backend::{InstrPerf, Instruction, TensorMap},
+    cache::Cache,
     cuda::{
         context::{CudaContext, CudaStream},
         kernel_jit::JitKernel,
@@ -8,9 +9,7 @@ use crate::{
     opgraph::{op::Op, subgraph::OpSubgraph, Intermediate, Node, NodeId, OpGraph},
     shape::Shape,
 };
-use ahash::AHashMap;
-use parking_lot::Mutex;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 mod jit;
 
@@ -54,13 +53,8 @@ impl PermuteDims {
     }
 
     fn get_cached_kernel(&self, cx: &CudaContext) -> Arc<JitKernel> {
-        static CACHE: OnceLock<Mutex<AHashMap<OpSubgraph, Arc<JitKernel>>>> = OnceLock::new();
-        CACHE
-            .get_or_init(Default::default)
-            .lock()
-            .entry(self.subgraph.clone())
-            .or_insert_with(|| Arc::new(self.build_kernel(cx)))
-            .clone()
+        static CACHE: Cache<OpSubgraph, Arc<JitKernel>> = Cache::with_capacity(1024);
+        CACHE.get_or_insert(&self.subgraph, || Arc::new(self.build_kernel(cx)))
     }
 
     fn build_kernel(&self, cx: &CudaContext) -> JitKernel {

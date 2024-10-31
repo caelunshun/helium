@@ -1,5 +1,6 @@
 use crate::{
     backend::{InstrPerf, Instruction, TensorMap},
+    cache::Cache,
     conv::Conv2dSettings,
     cuda::{
         allocator::{DeviceMemory, StreamId},
@@ -20,15 +21,9 @@ use crate::{
     shape::Shape,
     DataType,
 };
-use ahash::{AHashMap, AHashSet};
-use parking_lot::Mutex;
+use ahash::AHashSet;
 use slotmap::SecondaryMap;
-use std::{
-    collections::hash_map::Entry,
-    ffi::c_void,
-    ptr,
-    sync::{Arc, OnceLock},
-};
+use std::{ffi::c_void, ptr, sync::Arc};
 
 #[derive(Debug, Clone)]
 pub struct CudnnGraph {
@@ -52,27 +47,16 @@ impl CudnnGraph {
         &self,
         cudnn: &CudnnContext,
     ) -> (Arc<Engine>, Arc<SecondaryMap<NodeId, TensorDescriptor>>) {
-        static ENGINE_CACHE: OnceLock<
-            Mutex<
-                AHashMap<
-                    (usize, OpSubgraph),
-                    (Arc<Engine>, Arc<SecondaryMap<NodeId, TensorDescriptor>>),
-                >,
-            >,
-        > = OnceLock::new();
-        match ENGINE_CACHE
-            .get_or_init(Default::default)
-            .lock()
-            .entry((cudnn.id(), self.subgraph.clone()))
-        {
-            Entry::Occupied(entry) => entry.get().clone(),
-            Entry::Vacant(entry) => {
-                let (graph, tensor_desc_map) = self.build(cudnn);
-                let engine =
-                    Arc::new(Engine::choose_with_heuristic(&graph).expect("failed to get engine"));
-                entry.insert((engine, Arc::new(tensor_desc_map))).clone()
-            }
-        }
+        static ENGINE_CACHE: Cache<
+            (usize, OpSubgraph),
+            (Arc<Engine>, Arc<SecondaryMap<NodeId, TensorDescriptor>>),
+        > = Cache::with_capacity(256);
+        ENGINE_CACHE.get_or_insert(&(cudnn.id(), self.subgraph.clone()), || {
+            let (graph, tensor_desc_map) = self.build(cudnn);
+            let engine =
+                Arc::new(Engine::choose_with_heuristic(&graph).expect("failed to get engine"));
+            (engine, Arc::new(tensor_desc_map))
+        })
     }
 
     #[profiling::function]

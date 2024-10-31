@@ -9,6 +9,7 @@ pub mod cuda;
 pub mod data_type;
 pub mod device;
 //pub mod dyn_tensor;
+mod cache;
 pub mod conv;
 pub mod error;
 pub mod opgraph;

@@ -1,5 +1,6 @@
 use crate::{
     backend::{InstrPerf, Instruction, TensorMap},
+    cache::Cache,
     cuda::{
         context::{CudaContext, CudaStream},
         kernel_jit::JitKernel,
@@ -12,9 +13,7 @@ use crate::{
     },
     DataType,
 };
-use ahash::AHashMap;
-use parking_lot::Mutex;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 mod jit;
 
@@ -42,21 +41,15 @@ impl PointwiseGraph {
     }
 
     fn get_kernel(&self, cx: &CudaContext) -> Arc<JitKernel> {
-        static KERNEL_CACHE: OnceLock<Mutex<AHashMap<OpSubgraph, Arc<JitKernel>>>> =
-            OnceLock::new();
+        static KERNEL_CACHE: Cache<OpSubgraph, Arc<JitKernel>> = Cache::with_capacity(1024);
 
-        KERNEL_CACHE
-            .get_or_init(Default::default)
-            .lock()
-            .entry(self.subgraph.clone())
-            .or_insert_with(|| {
-                Arc::new(
-                    jit::generate_kernel(&self.subgraph)
-                        .build("pointwise_kernel", cx)
-                        .expect("failed to compile kernel"),
-                )
-            })
-            .clone()
+        KERNEL_CACHE.get_or_insert(&self.subgraph, || {
+            Arc::new(
+                jit::generate_kernel(&self.subgraph)
+                    .build("pointwise_kernel", cx)
+                    .expect("failed to compile kernel"),
+            )
+        })
     }
 
     #[profiling::function]

@@ -1,4 +1,5 @@
 use crate::{
+    cache::Cache,
     cuda::{
         context::{CudaContext, CudaStream},
         error::CudaError,
@@ -7,7 +8,6 @@ use crate::{
     opgraph::NodeId,
     DataType,
 };
-use ahash::AHashMap;
 use bumpalo::Bump;
 use cudarc::{
     driver::{LaunchAsync, LaunchConfig},
@@ -15,12 +15,10 @@ use cudarc::{
     nvrtc::Ptx,
 };
 use indoc::{formatdoc, indoc};
-use parking_lot::Mutex;
 use std::{
     cell::Cell,
-    collections::hash_map::Entry,
     ffi::c_void,
-    sync::{atomic::AtomicU64, Arc, OnceLock},
+    sync::{atomic::AtomicU64, Arc},
 };
 
 /// Utility to build JIT CUDA kernels from C++ source.
@@ -153,7 +151,7 @@ impl KernelBuilder {
             sm_version: u32,
         }
 
-        static CACHE: OnceLock<Mutex<AHashMap<CacheKey, Arc<Ptx>>>> = OnceLock::new();
+        static CACHE: Cache<CacheKey, Arc<Ptx>> = Cache::with_capacity(4096);
 
         let source = self.build_source(kernel_name);
         let key = CacheKey {
@@ -172,31 +170,27 @@ impl KernelBuilder {
             std::fs::write(format!("kernel/{name}"), key.source.as_bytes()).unwrap();
         }
 
-        match CACHE.get_or_init(Default::default).lock().entry(key) {
-            Entry::Occupied(entry) => Ok(entry.get().clone()),
-            Entry::Vacant(entry) => {
-                let arch = format!("sm_{}", target_device.sm_version()).leak();
-                let ptx = nvrtc::safe::compile_ptx_with_opts(
-                    &entry.key().source,
-                    nvrtc::safe::CompileOptions {
-                        name: Some(name),
-                        ftz: None,
-                        prec_sqrt: None,
-                        prec_div: None,
-                        fmad: None,
-                        options: vec!["--device-debug".to_owned(), "--dopt=on".to_owned()],
-                        //options: vec![],
-                        use_fast_math: None,
-                        maxrregcount: None,
-                        include_paths: vec!["/usr/local/cuda/include".to_owned()], // TODO Linux only
-                        arch: Some(arch),
-                    },
-                )?;
-                let ptx = Arc::new(ptx);
-                entry.insert(ptx.clone());
-                Ok(ptx)
-            }
-        }
+        Ok(CACHE.get_or_insert(&key, || {
+            let arch = format!("sm_{}", target_device.sm_version()).leak();
+            let ptx = nvrtc::safe::compile_ptx_with_opts(
+                &key.source,
+                nvrtc::safe::CompileOptions {
+                    name: Some(name),
+                    ftz: None,
+                    prec_sqrt: None,
+                    prec_div: None,
+                    fmad: None,
+                    options: vec!["--device-debug".to_owned(), "--dopt=on".to_owned()],
+                    //options: vec![],
+                    use_fast_math: None,
+                    maxrregcount: None,
+                    include_paths: vec!["/usr/local/cuda/include".to_owned()], // TODO Linux only
+                    arch: Some(arch),
+                },
+            )
+            .expect("failed to compile kernel to PTX");
+            Arc::new(ptx)
+        }))
     }
 
     #[profiling::function]
