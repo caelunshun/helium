@@ -12,6 +12,7 @@ pub mod device;
 mod cache;
 pub mod conv;
 pub mod error;
+mod module;
 pub mod opgraph;
 mod raw_tensor;
 mod shape;
