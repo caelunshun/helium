@@ -31,6 +31,7 @@ pub trait Backend: Copy + Sized + Debug + Send + Sync + 'static {
         input_tensors: &TensorMap<Self>,
         device: Self::Device,
         plan: &Plan<Self>,
+        op_graph: &Arc<OpGraph>,
     ) -> Self::Executor;
 }
 
@@ -48,7 +49,7 @@ pub trait BackendExt: Backend {
 
         let mut tensors = TensorMap::new(&graph, inputs);
 
-        let mut executor = self.begin_execute(&tensors, device, &plan);
+        let mut executor = self.begin_execute(&tensors, device, &plan, &graph);
         for step in plan.steps() {
             for released_tensor in step.tensors_to_release() {
                 tensors.free(*released_tensor);

@@ -20,6 +20,7 @@ use cudarc::{
 use parking_lot::{Mutex, MutexGuard, RwLock};
 use std::{
     cell::Cell,
+    ffi::c_void,
     iter,
     sync::{Arc, OnceLock},
     time::Duration,
@@ -166,6 +167,24 @@ impl CudaStream {
     pub fn new(device: &Arc<CudaDevice>) -> Result<Self, CudaError> {
         let stream = device.fork_default_stream()?;
         Ok(Self { stream })
+    }
+
+    pub fn insert_host_callback<F: FnOnce() + Send + 'static>(
+        &self,
+        callback: F,
+    ) -> Result<(), CudaError> {
+        unsafe extern "C" fn host_callback<F: FnOnce() + Send + 'static>(user_data: *mut c_void) {
+            let f = Box::from_raw(user_data.cast::<F>());
+            f();
+        }
+
+        let callback = Box::into_raw(Box::new(callback)).cast::<c_void>();
+        unsafe {
+            driver::sys::lib()
+                .cuLaunchHostFunc(self.raw(), Some(host_callback::<F>), callback)
+                .result()?;
+        }
+        Ok(())
     }
 
     pub fn raw(&self) -> CUstream {

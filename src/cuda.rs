@@ -8,11 +8,10 @@ use crate::{
     },
     data_type::{DataSlice, DataType, DataVec},
     opgraph::{op::Op, subgraph::OpSubgraph, NodeId, OpGraph},
-    thread_pool::BlockingThreadPool,
 };
 use ahash::AHashSet;
 use instr::pointwise::PointwiseGraph;
-use std::{mem, sync::Arc};
+use std::sync::Arc;
 
 mod allocator;
 pub mod context;
@@ -100,6 +99,7 @@ impl Backend for Cuda {
         input_tensors: &TensorMap<Self>,
         device: Self::Device,
         plan: &Plan<Self>,
+        _op_graph: &Arc<OpGraph>,
     ) -> Self::Executor {
         let cx = CudaContext::global(device).expect("failed to get CUDA context");
 
@@ -114,19 +114,18 @@ impl Backend for Cuda {
         }
 
         let streams = cx.stream_pool().expect("failed to get stream pool");
-        let sync_events = streams.iter().map(|_| CudaEvent::new().unwrap()).collect();
+        let op_stream = &streams[0];
 
         let start = CudaEvent::new().expect("failed to create CUDA event");
         let stop = CudaEvent::new().expect("failed to create CUDA event");
 
         start
-            .record(&streams[0])
+            .record(op_stream)
             .expect("failed to record CUDA event");
 
         CudaExecutor {
             cx,
-            streams,
-            sync_events,
+            op_stream,
             instr_index: 0,
             hold_allocations: Vec::new(),
             allocation_stream,
@@ -134,19 +133,34 @@ impl Backend for Cuda {
             synced_tensors_this_step: Vec::new(),
             start: Arc::new(start),
             stop: Arc::new(stop),
+            output_tensors: enumerate_output_tensors(plan),
         }
     }
 }
 
+fn enumerate_output_tensors(plan: &Plan<Cuda>) -> AHashSet<NodeId> {
+    let mut alive = AHashSet::new();
+    for step in plan.steps() {
+        for instr in step.instrs() {
+            alive.extend(instr.outputs());
+        }
+        for free in step.tensors_to_release() {
+            alive.remove(&free);
+        }
+    }
+    alive
+}
+
 pub struct CudaExecutor {
     cx: &'static CudaContext,
-    streams: &'static [CudaStream],
-    sync_events: Vec<CudaEvent>,
+    op_stream: &'static CudaStream,
     hold_allocations: Vec<DeviceMemory>,
     instr_index: usize,
     allocation_stream: StreamId,
     synced_tensors: AHashSet<TensorStorageId>,
     synced_tensors_this_step: Vec<TensorStorageId>,
+
+    output_tensors: AHashSet<NodeId>,
 
     /// Events used for profiling.
     #[cfg_attr(not(feature = "cuda-tracing"), expect(unused))]
@@ -174,14 +188,12 @@ impl Executor<Cuda> for CudaExecutor {
 
     #[profiling::function]
     fn execute_instr(&mut self, instr: &Instr, tensors: &mut TensorMap<Cuda>) {
-        let stream = &self.streams[self.instr_index % self.streams.len()];
-
         for input in instr.inputs() {
             let storage = tensors.get_storage(input);
             if !self.synced_tensors.contains(&storage.id()) {
                 storage
                     .ready_event()
-                    .wait(stream)
+                    .wait(self.op_stream)
                     .expect("failed to wait on event");
                 self.synced_tensors_this_step.push(storage.id());
             }
@@ -189,7 +201,7 @@ impl Executor<Cuda> for CudaExecutor {
 
         instr.execute(
             tensors,
-            stream,
+            self.op_stream,
             self.cx,
             &mut self.hold_allocations,
             self.allocation_stream,
@@ -199,26 +211,18 @@ impl Executor<Cuda> for CudaExecutor {
 
         for output in instr.outputs() {
             self.synced_tensors.insert(tensors.get_storage(output).id());
-            tensors
-                .get_storage(output)
-                .ready_event()
-                .record(stream)
-                .expect("failed to record event");
+            if self.output_tensors.contains(&output) {
+                tensors
+                    .get_storage(output)
+                    .ready_event()
+                    .record(self.op_stream)
+                    .expect("failed to record event");
+            }
         }
     }
 
     #[profiling::function]
     fn end_step(&mut self) {
-        for (event, stream) in self.sync_events.iter().zip(self.streams) {
-            event.record(stream).unwrap();
-        }
-        for (i, stream) in self.streams.iter().enumerate() {
-            for (j, event) in self.sync_events.iter().enumerate() {
-                if i != j {
-                    event.wait(stream).unwrap();
-                }
-            }
-        }
         self.synced_tensors
             .extend(self.synced_tensors_this_step.drain(..));
     }
@@ -227,13 +231,13 @@ impl Executor<Cuda> for CudaExecutor {
 impl Drop for CudaExecutor {
     fn drop(&mut self) {
         self.stop
-            .record(&self.streams[0])
+            .record(self.op_stream)
             .expect("failed to record stop event");
         #[cfg(feature = "cuda-tracing")]
         {
             let stop = self.stop.clone();
             let start = self.start.clone();
-            BlockingThreadPool::global().spawn(move || {
+            crate::thread_pool::BlockingThreadPool::global().spawn(move || {
                 let time_elapsed = stop.measure_time_elapsed(&start).unwrap();
                 tracing::debug!("GPU execution time: {time_elapsed:.2?}");
             });
@@ -245,13 +249,12 @@ impl Drop for CudaExecutor {
 
         let cx = self.cx;
         let allocation_stream = self.allocation_stream;
-        let sync_events = mem::take(&mut self.sync_events);
-        BlockingThreadPool::global().spawn(move || {
-            for event in sync_events {
-                event.sync().unwrap();
-            }
-            cx.allocator().end_stream(allocation_stream);
-        });
+
+        self.op_stream
+            .insert_host_callback(move || {
+                cx.allocator().end_stream(allocation_stream);
+            })
+            .unwrap();
     }
 }
 

@@ -50,6 +50,9 @@ impl HostPinnedAllocator {
     pub fn alloc(&mut self, layout: Layout) -> Result<HostPinnedMemory, CudaError> {
         assert!(layout.align() <= Self::MAX_ALIGN);
         assert!(layout.align().is_power_of_two());
+
+        self.process_dropped_memories();
+
         let block =
             match self
                 .block_allocator
@@ -71,6 +74,12 @@ impl HostPinnedAllocator {
             ptr,
             on_drop: Arc::clone(&self.dropped_memories),
         })
+    }
+
+    fn process_dropped_memories(&mut self) {
+        for block in self.dropped_memories.lock().drain(..) {
+            self.block_allocator.deallocate(block);
+        }
     }
 
     fn new_page_for_at_least(&mut self, min_size: usize) -> Result<(), CudaError> {

@@ -47,17 +47,15 @@ impl BlockAllocator {
 
                 let matches_stream = match block.in_use_by_streams.len() {
                     0 => true,
-                    1 => {
-                        let stream = block.in_use_by_streams.iter().copied().next().unwrap();
-                        match allocating_stream {
-                            Some(allocating_stream) => {
-                                stream == allocating_stream
-                                    || self.streams[allocating_stream].ancestors.contains(&stream)
-                            }
-                            None => false,
+                    _ => match allocating_stream {
+                        Some(allocating_stream) => {
+                            block.in_use_by_streams.iter().copied().all(|s| {
+                                s == allocating_stream
+                                    || self.streams[allocating_stream].ancestors.contains(&s)
+                            })
                         }
-                    }
-                    _ => false,
+                        None => false,
+                    },
                 };
 
                 if !matches_stream {

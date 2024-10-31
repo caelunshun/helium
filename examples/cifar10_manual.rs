@@ -438,7 +438,7 @@ fn main() {
                 }
             });
 
-            let (result_tx, result_rx) = flume::bounded::<(Vec<usize>, Tensor<2>, Tensor<1>)>(1);
+            let (result_tx, result_rx) = flume::bounded::<(Vec<usize>, Tensor<2>, Tensor<1>)>(4);
             let thread = s.spawn(move || {
                 for (labels, probs, loss) in result_rx {
                     let mut num_correct = 0;

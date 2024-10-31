@@ -5,7 +5,6 @@ use crate::{
         error::CudaError,
     },
     data_type::{DataSlice, DataType, DataVec},
-    thread_pool::BlockingThreadPool,
 };
 use cudarc::{driver, driver::sys::CUdeviceptr};
 use half::{bf16, f16};
@@ -89,7 +88,6 @@ impl TensorStorage {
             Layout::from_size_align(bytes.len(), Self::PAGE_LOCKED_MEM_ALIGNMENT).unwrap(),
         )?;
 
-        let transfer_finished = CudaEvent::new()?;
         unsafe {
             ptr::copy_nonoverlapping(bytes.as_ptr(), page_locked.as_ptr(), bytes.len());
 
@@ -100,13 +98,10 @@ impl TensorStorage {
                 page_locked_slice,
                 stream.raw() as _,
             )?;
-            transfer_finished.record(stream)?;
 
-            // The page-locked memory cannot be dropped until the transfer completes.
-            BlockingThreadPool::global().spawn(move || {
-                transfer_finished.sync().unwrap();
+            stream.insert_host_callback(move || {
                 drop(page_locked);
-            });
+            })?;
         }
         Ok(())
     }
@@ -120,11 +115,9 @@ impl TensorStorage {
         let num_bytes = usize::try_from(self.memory.len()).unwrap();
         let page_locked = HostPinnedAllocator::global()
             .alloc(Layout::from_size_align(num_bytes, Self::PAGE_LOCKED_MEM_ALIGNMENT).unwrap())?;
-        let transfer_event = CudaEvent::new()?;
         unsafe {
             let page_locked_slice = slice::from_raw_parts_mut(page_locked.as_ptr(), num_bytes);
             driver::result::memcpy_dtoh_async(page_locked_slice, self.device_ptr(), stream.raw())?;
-            transfer_event.record(stream)?;
         }
 
         let data_type = self.data_type;
@@ -132,9 +125,7 @@ impl TensorStorage {
         // Tensor memory needs to stay alive until transfer completes.
         let device_memory_handle = self.memory.clone();
 
-        BlockingThreadPool::global().spawn(move || {
-            transfer_event.sync().unwrap();
-            // Transfer now complete.
+        stream.insert_host_callback(move || {
             let bytes = unsafe { slice::from_raw_parts(page_locked.as_ptr(), num_bytes) };
 
             let data_vec = match data_type {
@@ -169,7 +160,7 @@ impl TensorStorage {
             drop(device_memory_handle);
 
             callback(data_vec);
-        });
+        })?;
 
         Ok(())
     }

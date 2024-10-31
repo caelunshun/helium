@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use flume::Sender;
 use std::{sync::OnceLock, thread};
 

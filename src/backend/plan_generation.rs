@@ -89,7 +89,7 @@ impl<B: Backend> Step<B> {
         &self.instrs
     }
 
-    pub(super) fn tensors_to_release(&self) -> &[NodeId] {
+    pub fn tensors_to_release(&self) -> &[NodeId] {
         &self.tensors_to_release
     }
 }
