@@ -14,7 +14,7 @@ use cudarc::{
     nvrtc,
     nvrtc::Ptx,
 };
-use indoc::{formatdoc, indoc};
+use indoc::formatdoc;
 use std::{
     cell::Cell,
     ffi::c_void,
@@ -40,25 +40,8 @@ impl Default for KernelBuilder {
                 "cuda_fp16.h".to_owned(),
                 "vector_types.h".to_owned(),
             ],
-            items: vec![indoc! {"
-                    typedef unsigned int uint32_t;
-                    typedef unsigned char uint8_t;
-        
-                    struct alignas(8) __nv_bfloat164 {
-                        __nv_bfloat16 x;
-                        __nv_bfloat16 y;
-                        __nv_bfloat16 z;
-                        __nv_bfloat16 w;
-                    };
 
-                    struct alignas(8) half4 {
-                        half x;
-                        half y;
-                        half z;
-                        half w;
-                    };
-                "}
-            .to_owned()],
+            items: vec!["typedef unsigned int uint32_t;".to_owned()],
             params: vec![],
             param_declarations: vec![],
             statements: vec![],

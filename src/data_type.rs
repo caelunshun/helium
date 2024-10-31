@@ -1,4 +1,8 @@
 use half::{bf16, f16};
+use std::{
+    hash::{Hash, Hasher},
+    mem,
+};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum DataType {
@@ -36,7 +40,7 @@ pub enum DataClass {
     Bool,
 }
 
-pub trait DataClassTrait {
+pub trait DataClassTrait: Copy + Clone + Send + Sync {
     type HighP: Copy;
 
     fn data_class() -> DataClass;
@@ -350,5 +354,88 @@ impl AsDataSlice for Vec<f16> {
 impl AsDataSlice for Vec<u32> {
     fn as_data_slice(&self) -> DataSlice {
         DataSlice::U32(self.as_slice())
+    }
+}
+
+/// Dynamic scalar of some type.
+///
+/// Equality and hashing are implemented using the bit
+/// representation of floating-point values.
+#[derive(Copy, Clone, Debug)]
+pub enum Scalar {
+    F32(f32),
+    Bf16(bf16),
+    F16(f16),
+    U32(u32),
+    Bool(bool),
+}
+
+impl Scalar {
+    pub fn data_type(&self) -> DataType {
+        match self {
+            Scalar::F32(_) => DataType::F32,
+            Scalar::Bf16(_) => DataType::Bf16,
+            Scalar::F16(_) => DataType::F16,
+            Scalar::U32(_) => DataType::U32,
+            Scalar::Bool(_) => DataType::Bool,
+        }
+    }
+}
+
+impl PartialEq for Scalar {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Scalar::F32(a), Scalar::F32(b)) => a.to_bits() == b.to_bits(),
+            (Scalar::Bf16(a), Scalar::Bf16(b)) => a.to_bits() == b.to_bits(),
+            (Scalar::F16(a), Scalar::F16(b)) => a.to_bits() == b.to_bits(),
+            (Scalar::U32(a), Scalar::U32(b)) => a == b,
+            (Scalar::Bool(a), Scalar::Bool(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Scalar {}
+
+impl Hash for Scalar {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        mem::discriminant(self).hash(state);
+        match self {
+            Scalar::F32(x) => x.to_bits().hash(state),
+            Scalar::Bf16(x) => x.to_bits().hash(state),
+            Scalar::F16(x) => x.to_bits().hash(state),
+            Scalar::U32(x) => x.hash(state),
+            Scalar::Bool(x) => x.hash(state),
+        }
+    }
+}
+
+impl From<f32> for Scalar {
+    fn from(value: f32) -> Self {
+        Self::F32(value)
+    }
+}
+
+impl From<bf16> for Scalar {
+    fn from(value: bf16) -> Self {
+        Self::Bf16(value)
+    }
+}
+
+impl From<f16> for Scalar {
+    fn from(value: f16) -> Self {
+        Self::F16(value)
+    }
+}
+
+impl From<u32> for Scalar {
+    fn from(value: u32) -> Self {
+        Self::U32(value)
+    }
+}
+
+impl From<bool> for Scalar {
+    fn from(value: bool) -> Self {
+        Self::Bool(value)
     }
 }

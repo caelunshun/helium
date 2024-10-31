@@ -1,12 +1,13 @@
 use crate::{
     conv::Conv2dSettings,
-    data_type::{AsDataSlice, DataClass, DataClassTrait, DataTypeConversion, Float},
+    data_type::{AsDataSlice, DataClass, DataClassTrait, DataTypeConversion, Float, Scalar},
     raw_tensor::RawTensor,
     tensor::tape::Tape,
     DataType, Device, Gradients, Param,
 };
 use ahash::AHashMap;
 use bytemuck::Pod;
+use half::{bf16, f16};
 use pollster::FutureExt;
 use std::{
     fmt::Debug,
@@ -147,8 +148,40 @@ impl<const D: usize, C: DataClassTrait> Tensor<D, C> {
 
 /// Float-only operations.
 impl<const D: usize> Tensor<D, Float> {
-    pub fn from_slice<'a>(slice: impl AsDataSlice, shape: [usize; D], device: Device) -> Self {
+    pub fn from_slice(slice: impl AsDataSlice, shape: [usize; D], device: Device) -> Self {
         Self::from_raw(RawTensor::from_slice(slice, shape, device))
+    }
+
+    pub fn from_constant(constant: impl Into<Scalar>, shape: [usize; D], device: Device) -> Self {
+        let constant = constant.into();
+        assert_eq!(
+            constant.data_type().class(),
+            DataClass::Float,
+            "called Tensor::from_constant with non-matching data type"
+        );
+        Self::from_raw(RawTensor::from_constant(constant, shape, device))
+    }
+
+    /// Creates a tensor of all zeros in the given shape.
+    pub fn zeros(shape: [usize; D], data_type: DataType, device: Device) -> Self {
+        let scalar = match data_type {
+            DataType::F16 => Scalar::F16(f16::ZERO),
+            DataType::Bf16 => Scalar::Bf16(bf16::ZERO),
+            DataType::F32 => Scalar::F32(0.0),
+            _ => panic!("illegal data type {data_type:?} for Tensor::zeros"),
+        };
+        Self::from_constant(scalar, shape, device)
+    }
+
+    /// Creates a tensor of all ones in the given shape.
+    pub fn ones(shape: [usize; D], data_type: DataType, device: Device) -> Self {
+        let scalar = match data_type {
+            DataType::F16 => Scalar::F16(f16::ONE),
+            DataType::Bf16 => Scalar::Bf16(bf16::ONE),
+            DataType::F32 => Scalar::F32(1.0),
+            _ => panic!("illegal data type {data_type:?} for Tensor::zeros"),
+        };
+        Self::from_constant(scalar, shape, device)
     }
 
     pub async fn to_vec_async<T: DataTypeConversion<Float>>(&self) -> Vec<T> {
@@ -198,8 +231,9 @@ impl<const D: usize> Tensor<D, Float> {
             .tape
             .as_ref()
             .expect("called backward() on tensor that did not have gradient tracking enabled");
-        tape.backward(Tensor::<1>::from_raw(RawTensor::from_scalar(
+        tape.backward(Tensor::<1>::from_raw(RawTensor::from_constant(
             1.0f32,
+            [1],
             self.raw.device(),
         )))
     }
@@ -334,8 +368,8 @@ impl<const D: usize> Tensor<D, Float> {
         self.op(
             |x| x.relu(),
             |x, flow| {
-                let zero = RawTensor::from_scalar(0.0, x.device()).broadcast_to(x.shape());
-                let one = RawTensor::from_scalar(1.0, x.device()).broadcast_to(x.shape());
+                let zero = RawTensor::from_constant(0.0f32, x.shape(), x.device());
+                let one = RawTensor::from_constant(1.0f32, x.shape(), x.device());
                 x.clone()
                     .compare_less_than(zero.clone())
                     .select(zero, one)
@@ -448,7 +482,7 @@ impl<const D: usize> Tensor<D, Float> {
 
                 (match_mask.select(
                     num_matching.recip(),
-                    RawTensor::from_scalar(0.0, x.device()).broadcast_to(shape),
+                    RawTensor::from_constant(0.0f32, shape, x.device()),
                 ) * flow.reshape(temp_shape).broadcast_to(shape))
                 .into_data_type(dtype)
             },
@@ -480,7 +514,7 @@ impl<const D: usize> Tensor<D, Float> {
 
                 (match_mask.select(
                     num_matching.recip(),
-                    RawTensor::from_scalar(0.0, x.device()).broadcast_to(shape),
+                    RawTensor::from_constant(0.0f32, shape, x.device()),
                 ) * flow.reshape(temp_shape).broadcast_to(shape))
                 .into_data_type(dtype)
             },

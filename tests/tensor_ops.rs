@@ -2,7 +2,7 @@ use approx::assert_ulps_eq;
 use half::{bf16, f16};
 use helium::{
     conv::{Conv2dSettings, PaddingMode},
-    Device, Param, Tensor,
+    DataType, Device, Param, Tensor,
 };
 
 const DEVICE: Device = Device::Cuda(0);
@@ -456,4 +456,17 @@ fn multiple_iterations() {
         dbg!(y.to_vec::<f32>());
     }
     dbg!(mean.to_vec::<f32>());
+}
+
+#[test]
+fn constant() {
+    let x = Tensor::from_constant(10.0f32, [10, 20], DEVICE);
+    assert_eq!(x.shape(), [10, 20]);
+    assert_eq!(x.data_type(), DataType::F32);
+    assert_eq!(x.to_vec::<f32>(), vec![10.0f32; 200]);
+
+    let y = Tensor::from_constant(bf16::from_f32(200.0), [2, 3], DEVICE);
+    assert_eq!(y.shape(), [2, 3]);
+    assert_eq!(y.data_type(), DataType::Bf16);
+    assert_eq!(y.to_vec::<bf16>(), vec![bf16::from_f32(200.0); 6]);
 }

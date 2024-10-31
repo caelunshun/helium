@@ -1,6 +1,6 @@
 use crate::{
     cuda::kernel_jit::{Ident, KernelBuilder, KernelParam},
-    data_type::DataClass,
+    data_type::{DataClass, Scalar},
     opgraph::{
         op::{self, BinaryPointwiseOp, Broadcast, CompareOp, Op, ReduceOp, UnaryPointwiseOp},
         subgraph::OpSubgraph,
@@ -20,7 +20,9 @@ pub fn generate_kernel(subgraph: &OpSubgraph) -> KernelBuilder {
     let mut kernel = KernelBuilder::new();
     let mut cx = Context::default();
 
-    kernel.statement(format!("/* {subgraph:#?} */"));
+    if cfg!(feature = "cuda-debug") {
+        kernel.statement(format!("/* {subgraph:#?} */"));
+    }
 
     for input in subgraph.inputs() {
         cx.input_vars.insert(
@@ -336,6 +338,13 @@ fn compute_node_output(
                 binary_pointwise_op(&lhs, &rhs, *op, descriptor.data_type.class())
             ));
         }
+        Op::Constant(op::Constant { value, .. }) => {
+            kernel.statement(format!(
+                "{} {ident} = {};",
+                cpp_data_class(value.data_type().class()),
+                scalar_to_cpp(*value),
+            ));
+        }
         Op::Compare(op::Compare { lhs, rhs, op }) => {
             let lhs = compute_node_output(
                 subgraph,
@@ -497,6 +506,27 @@ fn compute_node_output(
     }
 
     ident
+}
+
+fn scalar_to_cpp(scalar: Scalar) -> String {
+    match scalar {
+        Scalar::F32(x) => {
+            let x = x.to_bits();
+            format!("__uint_as_float(0x{x:x}u)")
+        }
+        Scalar::Bf16(x) => {
+            let x = x.to_bits();
+            format!("__ushort_as_bfloat16(0x{x:x}u)")
+        }
+        Scalar::F16(x) => {
+            let x = x.to_bits();
+            format!("__ushort_as_half(0x{x:x}u)")
+        }
+        Scalar::U32(x) => {
+            format!("0x{x:x}u")
+        }
+        Scalar::Bool(x) => x.to_string(),
+    }
 }
 
 fn unary_pointwise_op(input: &str, op: UnaryPointwiseOp) -> String {

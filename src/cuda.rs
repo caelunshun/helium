@@ -39,7 +39,8 @@ impl Backend for Cuda {
                 let subgraph = OpSubgraph::from_nodes(graph, vec![node_id]);
                 Instr::PermuteDims(PermuteDims::new(subgraph))
             }
-            Op::SwapDims(_)
+            Op::Constant(_)
+            | Op::SwapDims(_)
             | Op::UnaryPointwise(_)
             | Op::BinaryPointwise(_)
             | Op::ChangeDataType(_)

@@ -1,6 +1,6 @@
 use crate::{
     conv::Conv2dSettings,
-    data_type::DataType,
+    data_type::{DataType, Scalar},
     opgraph::{Descriptor, NodeId},
     shape::Shape,
 };
@@ -21,6 +21,7 @@ pub enum Op {
     Conv(Conv),
     ConvBackwardData(ConvBackwardData),
     ConvBackwardFilter(ConvBackwardFilter),
+    Constant(Constant),
 }
 
 impl Op {
@@ -39,6 +40,7 @@ impl Op {
             Op::Conv(op) => vec![op.image, op.filter],
             Op::ConvBackwardData(op) => vec![op.flow, op.filter],
             Op::ConvBackwardFilter(op) => vec![op.flow, op.image],
+            Op::Constant(_) => vec![],
         }
     }
 
@@ -161,6 +163,10 @@ impl Op {
                     ]),
                 }
             }
+            Op::Constant(op) => Descriptor {
+                data_type: op.value.data_type(),
+                shape: op.shape.clone(),
+            },
         }
     }
 
@@ -179,6 +185,7 @@ impl Op {
             Op::Conv(_) => OpKind::Conv,
             Op::ConvBackwardData(_) => OpKind::ConvBackwardData,
             Op::ConvBackwardFilter(_) => OpKind::ConvBackwardFilter,
+            Op::Constant(_) => OpKind::Constant,
         }
     }
 
@@ -231,6 +238,7 @@ impl Op {
                 op.flow = mapping[op.flow];
                 op.image = mapping[op.image];
             }
+            Op::Constant(_) => {}
         }
     }
 }
@@ -250,6 +258,7 @@ pub enum OpKind {
     Conv,
     ConvBackwardData,
     ConvBackwardFilter,
+    Constant,
 }
 
 /// Batched multiplication of column-major matrices stored in the last
@@ -438,4 +447,11 @@ pub struct ConvBackwardData {
     pub settings: Conv2dSettings,
     pub filter: NodeId,
     pub flow: NodeId,
+}
+
+/// A constant value, broadcast to a given shape.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Constant {
+    pub value: Scalar,
+    pub shape: Shape,
 }

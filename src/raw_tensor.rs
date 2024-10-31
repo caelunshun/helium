@@ -1,7 +1,7 @@
 use crate::{
     backend::{Backend, BackendExt},
     conv::Conv2dSettings,
-    data_type::{AsDataSlice, DataClass, DataType, DataVec},
+    data_type::{AsDataSlice, DataClass, DataType, DataVec, Scalar},
     device::Device,
     opgraph::{
         op,
@@ -59,11 +59,7 @@ impl RawTensor {
         self.shape().num_dims()
     }
 
-    pub fn from_slice<'a>(
-        slice: impl AsDataSlice,
-        shape: impl Into<Shape>,
-        device: Device,
-    ) -> Self {
+    pub fn from_slice(slice: impl AsDataSlice, shape: impl Into<Shape>, device: Device) -> Self {
         let slice = slice.as_data_slice();
         let shape = shape.into();
 
@@ -96,11 +92,21 @@ impl RawTensor {
         Self { inner, device }
     }
 
-    pub fn from_scalar<T>(float: T, device: Device) -> Self
-    where
-        for<'a> &'a [T]: AsDataSlice,
-    {
-        Self::from_slice(&[float][..], [1], device)
+    pub fn from_constant(
+        value: impl Into<Scalar>,
+        shape: impl Into<Shape>,
+        device: Device,
+    ) -> Self {
+        let shape = shape.into();
+        assert!(shape.num_elements() > 0);
+        let builder = OpGraphBuilderHandle::new(Mutex::new(OpGraphBuilder::new(device)));
+        Self::from_op(
+            &builder,
+            Op::Constant(op::Constant {
+                value: value.into(),
+                shape: shape,
+            }),
+        )
     }
 
     pub fn into_vec(self) -> IntoVec {
@@ -403,7 +409,7 @@ impl RawTensor {
     }
 
     pub fn pow_scalar(self, power: f32) -> Self {
-        let rhs = RawTensor::from_scalar(power, self.device).broadcast_to(self.shape());
+        let rhs = RawTensor::from_slice(&[power][..], [1], self.device).broadcast_to(self.shape());
         self.pow(rhs)
     }
 
@@ -611,7 +617,7 @@ impl Add<f32> for RawTensor {
     type Output = RawTensor;
 
     fn add(self, rhs: f32) -> Self::Output {
-        let rhs = RawTensor::from_scalar(rhs, self.device).broadcast_to(self.shape());
+        let rhs = RawTensor::from_slice(&[rhs][..], [1], self.device).broadcast_to(self.shape());
         self + rhs
     }
 }
@@ -643,7 +649,7 @@ impl Mul<f32> for RawTensor {
     type Output = RawTensor;
 
     fn mul(self, rhs: f32) -> Self::Output {
-        let rhs = RawTensor::from_scalar(rhs, self.device).broadcast_to(self.shape());
+        let rhs = RawTensor::from_slice(&[rhs][..], [1], self.device).broadcast_to(self.shape());
         self * rhs
     }
 }
