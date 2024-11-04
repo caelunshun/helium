@@ -219,7 +219,6 @@ impl<B: Backend> InstrGraph<B> {
     /// Fuses two instructions. `b` must depend on `a`.
     ///
     /// `a` and `b` are removed from the graph, producing a new instruction.
-
     pub fn fuse_instrs(
         &mut self,
         a: InstrNodeId,
@@ -253,7 +252,7 @@ fn do_fusions<B: Backend>(graph: &mut InstrGraph<B>, op_graph: &Arc<OpGraph>) {
                 continue 'outer;
             }
         }
-        for prev in graph.instr_dependencies(current).collect::<Vec<_>>() {
+        /*for prev in graph.instr_dependencies(current).collect::<Vec<_>>() {
             for sibling in graph
                 .instr_dependents(prev)
                 .filter(|id| *id != current)
@@ -266,7 +265,7 @@ fn do_fusions<B: Backend>(graph: &mut InstrGraph<B>, op_graph: &Arc<OpGraph>) {
                     continue 'outer;
                 }
             }
-        }
+        }*/
     }
 }
 
@@ -326,6 +325,7 @@ fn generate_plan_from_graph<B: Backend>(mut graph: InstrGraph<B>, op_graph: &OpG
     assert_eq!(
         steps.iter().map(|step| step.instrs.len()).sum::<usize>(),
         num_instrs,
+        "cycle detected in instruction graph?"
     );
 
     let mut plan = Plan { steps };
