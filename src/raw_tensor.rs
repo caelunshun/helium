@@ -1,6 +1,6 @@
 use crate::{
     backend::{Backend, BackendExt},
-    conv::Conv2dSettings,
+    conv::Conv2dParams,
     data_type::{AsDataSlice, DataClass, DataType, DataVec, Scalar},
     device::Device,
     opgraph::{
@@ -217,7 +217,7 @@ impl RawTensor {
     /// `K` = output channel count
     /// `R` = kernel height
     /// `S` = kernel width
-    pub fn conv2d(self, filter: Self, settings: Conv2dSettings) -> Self {
+    pub fn conv2d(self, filter: Self, settings: Conv2dParams) -> Self {
         settings.validate();
 
         let image_shape = self.shape();
@@ -271,7 +271,7 @@ impl RawTensor {
     pub fn conv2d_backward_data(
         self,
         filter: Self,
-        settings: Conv2dSettings,
+        settings: Conv2dParams,
         input_size: [usize; 2],
     ) -> Self {
         // TODO: validation
@@ -289,7 +289,7 @@ impl RawTensor {
         )
     }
 
-    pub fn conv2d_backward_filter(self, image: Self, settings: Conv2dSettings) -> Self {
+    pub fn conv2d_backward_filter(self, image: Self, settings: Conv2dParams) -> Self {
         // TODO: validation
         // (this function is only used internally by Tensor autodiff)
         let (cx, flow) = self.make_graph();

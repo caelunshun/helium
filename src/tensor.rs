@@ -1,5 +1,5 @@
 use crate::{
-    conv::Conv2dSettings,
+    conv::Conv2dParams,
     data_type::{AsDataSlice, DataClass, DataClassTrait, DataTypeConversion, Float, Scalar},
     raw_tensor::RawTensor,
     tensor::tape::Tape,
@@ -395,7 +395,7 @@ impl<const D: usize> Tensor<D, Float> {
     /// Image layout is NHWC (channels last), as opposed to torch which
     /// uses NCHW. Filter layout is KRSC, where K is the number of output
     /// channels and R and S the filter dimensions.
-    pub fn conv2d(&self, filter: impl AsTensor<4>, settings: Conv2dSettings) -> Self {
+    pub fn conv2d(&self, filter: impl AsTensor<4>, settings: Conv2dParams) -> Self {
         const {
             // TODO: potentially add support for greater number of batch dimensions?
             if D != 4 {

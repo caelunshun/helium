@@ -1,5 +1,5 @@
 use crate::{
-    conv::Conv2dSettings,
+    conv::Conv2dParams,
     data_type::{DataType, Scalar},
     opgraph::{Descriptor, NodeId},
     shape::Shape,
@@ -429,14 +429,14 @@ pub struct Select {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Conv {
-    pub settings: Conv2dSettings,
+    pub settings: Conv2dParams,
     pub image: NodeId,
     pub filter: NodeId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ConvBackwardFilter {
-    pub settings: Conv2dSettings,
+    pub settings: Conv2dParams,
     pub image: NodeId,
     pub flow: NodeId,
 }
@@ -444,7 +444,7 @@ pub struct ConvBackwardFilter {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ConvBackwardData {
     pub input_size: [usize; 2],
-    pub settings: Conv2dSettings,
+    pub settings: Conv2dParams,
     pub filter: NodeId,
     pub flow: NodeId,
 }

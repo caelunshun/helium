@@ -71,22 +71,27 @@ pub fn derive_module(input: DeriveInput) -> Result<TokenStream, Error> {
 
     let result = quote! {
         impl ::helium::module::Module for #struct_ident {
+            #[allow(unused_variables)]
             fn visit_params(&self, visitor: &mut impl ::helium::module::ParamVisitor) {
                 #impl_visit_params
             }
 
+            #[allow(unused_variables)]
             fn visit_params_mut(&mut self, visitor: &mut impl ::helium::module::ParamMutVisitor) {
                 #impl_visit_params_mut
             }
 
+            #[allow(unused_variables)]
             fn record(&self, recorder: &mut impl ::helium::module::record::Recorder) -> Result<(), ::helium::module::record::RecordError> {
                 #impl_record
             }
 
+            #[allow(unused_variables)]
             fn load_config(loader: &mut impl ::helium::module::record::ConfigLoader, device: ::helium::Device) -> Result<Self, ::helium::module::record::RecordError> {
                 #impl_load_config
             }
 
+            #[allow(unused_variables)]
             fn load_params(&mut self, loader: &mut impl ::helium::module::record::ParamLoader) -> Result<(), ::helium::module::record::RecordError> {
                 #impl_load_params
             }

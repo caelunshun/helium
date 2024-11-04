@@ -1,7 +1,7 @@
 use crate::{
     backend::{InstrPerf, Instruction, TensorMap},
     cache::Cache,
-    conv::Conv2dSettings,
+    conv::Conv2dParams,
     cuda::{
         allocator::{DeviceMemory, StreamId},
         context::{CudaContext, CudaStream},
@@ -377,7 +377,7 @@ impl Mode {
     }
 }
 
-fn make_conv_descriptor(settings: &Conv2dSettings) -> ConvDescriptor {
+fn make_conv_descriptor(settings: &Conv2dParams) -> ConvDescriptor {
     let padding = settings
         .padding_mode
         .compute_padding_amount(settings.kernel_size);

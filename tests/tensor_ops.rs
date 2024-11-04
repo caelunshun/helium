@@ -1,7 +1,7 @@
 use approx::assert_ulps_eq;
 use half::{bf16, f16};
 use helium::{
-    conv::{Conv2dSettings, PaddingMode},
+    conv::{Conv2dParams, PaddingMode},
     DataType, Device, Param, Tensor,
 };
 
@@ -369,7 +369,7 @@ fn conv_simple() {
     let w = Tensor::<1>::from_array([10.0, 20.0, 30.0, 40.0], DEVICE).reshape([2, 1, 1, 2]);
     let y = x.conv2d(
         &w,
-        Conv2dSettings {
+        Conv2dParams {
             in_channels: 2,
             out_channels: 2,
             kernel_size: [1, 1],

@@ -29,6 +29,11 @@ impl Linear {
             None
         };
 
+        weights.async_start_eval();
+        if let Some(bias) = &bias {
+            bias.async_start_eval();
+        }
+
         Self {
             weights: Param::new(weights),
             bias: bias.map(Param::new),
@@ -36,7 +41,7 @@ impl Linear {
     }
 
     pub fn forward(&self, x: &Tensor<2>) -> Tensor<2> {
-        let mut x = x.matmul(self.weights.value());
+        let mut x = x.matmul(self.weights.value().to_data_type(x.data_type()));
         if let Some(bias) = &self.bias {
             x = &x + bias.value().broadcast_to(x.shape());
         }

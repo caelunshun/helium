@@ -1,6 +1,8 @@
+use serde::{Deserialize, Serialize};
+
 /// Convolution parameters.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Conv2dSettings {
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Conv2dParams {
     pub in_channels: usize,
     pub out_channels: usize,
     pub kernel_size: [usize; 2],
@@ -9,7 +11,7 @@ pub struct Conv2dSettings {
     pub padding_mode: PaddingMode,
 }
 
-impl Default for Conv2dSettings {
+impl Default for Conv2dParams {
     fn default() -> Self {
         Self {
             in_channels: 0,
@@ -22,7 +24,7 @@ impl Default for Conv2dSettings {
     }
 }
 
-impl Conv2dSettings {
+impl Conv2dParams {
     pub fn validate(&self) {
         assert!(
             self.in_channels > 0,
@@ -73,7 +75,7 @@ impl Conv2dSettings {
 }
 
 /// Padding mode for convolution.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PaddingMode {
     Same,
     Valid,

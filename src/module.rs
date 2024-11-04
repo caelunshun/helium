@@ -22,6 +22,19 @@ pub trait Module: Sized + Send + Sync {
     fn load_config(loader: &mut impl ConfigLoader, device: Device) -> Result<Self, RecordError>;
     /// Loads the module parameters.
     fn load_params(&mut self, loader: &mut impl ParamLoader) -> Result<(), RecordError>;
+
+    /// Starts evaluating the parameter values on the device.
+    fn async_start_eval(&self) {
+        struct Visitor;
+
+        impl ParamVisitor for Visitor {
+            fn visit_param<const D: usize>(&mut self, param: &Param<D>) {
+                param.value().async_start_eval();
+            }
+        }
+
+        self.visit_params(&mut Visitor);
+    }
 }
 
 pub trait ParamVisitor {
@@ -211,6 +224,41 @@ impl<const D: usize> Module for Param<D> {
     fn load_params(&mut self, loader: &mut impl ParamLoader) -> Result<(), RecordError> {
         let device = self.value().device();
         self.set_value(loader.load_param("value", device)?);
+        Ok(())
+    }
+}
+
+impl<const D: usize> Module for Tensor<D> {
+    fn visit_params(&self, _visitor: &mut impl ParamVisitor) {}
+
+    fn visit_params_mut(&mut self, _visitor: &mut impl ParamMutVisitor) {}
+
+    fn record(&self, recorder: &mut impl Recorder) -> Result<(), RecordError> {
+        recorder.record_config(
+            "meta",
+            &ParamMetadata {
+                data_type: self.data_type(),
+                shape: self.shape().into(),
+            },
+        )?;
+        recorder.record_param("value", self)?;
+        Ok(())
+    }
+
+    fn load_config(loader: &mut impl ConfigLoader, device: Device) -> Result<Self, RecordError> {
+        let meta: ParamMetadata = loader.load_config("meta")?;
+        Ok(Tensor::<D>::zeros(
+            meta.shape
+                .dims()
+                .try_into()
+                .map_err(|_| RecordError::Other("shape mismatch".to_owned()))?,
+            meta.data_type,
+            device,
+        ))
+    }
+
+    fn load_params(&mut self, loader: &mut impl ParamLoader) -> Result<(), RecordError> {
+        *self = loader.load_param("value", self.device())?;
         Ok(())
     }
 }
