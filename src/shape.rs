@@ -1,7 +1,8 @@
+use serde::{Deserialize, Serialize};
 use std::ops::Index;
 
 /// Shape of a tensor.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Shape(Vec<usize>);
 
 impl Shape {

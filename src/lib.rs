@@ -12,7 +12,7 @@ pub mod device;
 mod cache;
 pub mod conv;
 pub mod error;
-mod module;
+pub mod module;
 pub mod opgraph;
 mod raw_tensor;
 mod shape;
@@ -24,6 +24,7 @@ pub use self::{
     //autodiff::{AdTensor, Gradients, Param},
     data_type::DataType,
     device::Device,
+    module::Module,
     tensor::{
         gradients::Gradients,
         param::{Param, ParamId},
@@ -33,3 +34,5 @@ pub use self::{
 /// Re-export of half-precision floating point types
 /// from the `half` crate.
 pub use half::{bf16, f16};
+#[doc(inline)]
+pub use helium_macros::Module;

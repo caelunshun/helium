@@ -1,10 +1,11 @@
 use half::{bf16, f16};
+use serde::{Deserialize, Serialize};
 use std::{
     hash::{Hash, Hasher},
     mem,
 };
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum DataType {
     F16,
     Bf16,

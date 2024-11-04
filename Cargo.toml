@@ -1,9 +1,13 @@
+[workspace]
+members = [".", "macros"]
+
 [package]
 name = "helium"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+helium-macros = { path = "macros" }
 ahash = "0.8"
 bumpalo = { version = "3", optional = true }
 bytemuck = { version = "1", features = ["derive", "extern_crate_alloc", "min_const_generics", "nightly_stdsimd", "nightly_portable_simd"] }
