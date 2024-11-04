@@ -10,12 +10,12 @@ fn derive_module() {
     struct M {
         param: Param<2>,
         #[module(config)]
-        config: u32,
+        _config: u32,
     }
 
     let module = M {
         param: Param::new(Tensor::<2>::from_array([[1.0f32]], Device::Cuda(0))),
-        config: 4,
+        _config: 4,
     };
 
     struct MockParamVisitor {

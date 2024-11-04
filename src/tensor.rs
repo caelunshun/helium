@@ -37,7 +37,6 @@ impl<const D: usize, C: DataClassTrait> Tensor<D, C> {
         }
     }
 
-    #[expect(unused)]
     pub(crate) fn into_raw(self) -> RawTensor {
         self.raw
     }

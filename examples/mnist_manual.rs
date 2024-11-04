@@ -1,74 +1,67 @@
-use helium::{Device, Gradients, Param, Tensor};
+use helium::{
+    initializer::Initializer,
+    modules::linear::{Linear, LinearSettings},
+    optimizer::{sgd::Sgd, Optimizer},
+    Device, Tensor,
+};
+use helium_macros::Module;
 use mnist::MnistBuilder;
 use pollster::FutureExt;
 use rand::prelude::*;
 use rand_pcg::Pcg64Mcg;
 use std::{future::Future, pin::Pin, thread, time::Instant};
 
+#[derive(Module)]
 struct Model {
-    layers: [Layer; 3],
+    layers: [Linear; 3],
 }
 
 impl Model {
     pub fn with_random_weights(rng: &mut impl Rng, device: Device) -> Self {
         Self {
             layers: [
-                Layer::with_random_weights(28 * 28, 256, rng, device),
-                Layer::with_random_weights(256, 128, rng, device),
-                Layer::with_random_weights(128, 10, rng, device),
+                Linear::new(
+                    LinearSettings {
+                        in_features: 28 * 28,
+                        out_features: 256,
+                        weight_initializer: Initializer::KaimingNormal,
+                        ..Default::default()
+                    },
+                    rng,
+                    device,
+                ),
+                Linear::new(
+                    LinearSettings {
+                        in_features: 256,
+                        out_features: 128,
+                        weight_initializer: Initializer::KaimingNormal,
+                        ..Default::default()
+                    },
+                    rng,
+                    device,
+                ),
+                Linear::new(
+                    LinearSettings {
+                        in_features: 128,
+                        out_features: 10,
+                        weight_initializer: Initializer::KaimingNormal,
+                        ..Default::default()
+                    },
+                    rng,
+                    device,
+                ),
             ],
         }
     }
 
     pub fn forward(&self, mut x: Tensor<2>) -> Tensor<2> {
         for (i, layer) in self.layers.iter().enumerate() {
-            x = layer.forward(x);
+            x = layer.forward(&x);
             if i != self.layers.len() - 1 {
                 x = x.relu();
             }
         }
         x
-    }
-
-    pub fn update_weights(&mut self, grads: Gradients, learning_rate: f32) {
-        for layer in &mut self.layers {
-            layer.update_weights(&grads, learning_rate);
-        }
-    }
-}
-
-struct Layer {
-    weights: Param<2>,
-    bias: Param<1>,
-}
-
-impl Layer {
-    pub fn with_random_weights(
-        inputs: usize,
-        outputs: usize,
-        rng: &mut impl Rng,
-        device: Device,
-    ) -> Self {
-        Self {
-            weights: init_xavier(inputs, outputs, rng, device).into(),
-            bias: init_zeros(outputs, device).into(),
-        }
-    }
-
-    pub fn forward(&self, x: Tensor<2>) -> Tensor<2> {
-        let [batch_size, _] = x.shape();
-        let [output_size] = self.bias.value().shape();
-        x.matmul(self.weights.value()) + self.bias.value().broadcast_to([batch_size, output_size])
-    }
-
-    pub fn update_weights(&mut self, grads: &Gradients, learning_rate: f32) {
-        let weight_grad = grads.get::<2>(self.weights.id());
-        let bias_grad = grads.get::<1>(self.bias.id());
-
-        self.weights
-            .set_value(self.weights.value().clone() - weight_grad * learning_rate);
-        self.bias
-            .set_value(self.bias.value().clone() - bias_grad * learning_rate);
     }
 }
 
@@ -84,18 +77,6 @@ fn log_softmax(x: Tensor<2>) -> Tensor<2> {
 
 fn cross_entropy_loss(logits: Tensor<2>, targets: Tensor<2>) -> Tensor<1> {
     -(log_softmax(logits) * targets).reduce_mean::<1>(2)
-}
-
-fn init_zeros(len: usize, device: Device) -> Tensor<1> {
-    Tensor::from_slice(vec![0.0f32; len], [len], device)
-}
-
-fn init_xavier(inputs: usize, outputs: usize, rng: &mut impl Rng, device: Device) -> Tensor<2> {
-    let x = (inputs as f32).sqrt().recip();
-    let weights = (0..inputs * outputs)
-        .map(|_| rng.gen_range(-x..=x))
-        .collect::<Vec<_>>();
-    Tensor::from_slice(weights, [inputs, outputs], device)
 }
 
 #[derive(Debug, Clone)]
@@ -145,8 +126,8 @@ fn main() {
         })
         .collect();
 
-    let num_epochs = 100;
-    let mut lr = 1e1;
+    let num_epochs = 20;
+    let mut lr = 1e0;
     let lr_gamma = 0.97;
     let batch_size = 1024;
 
@@ -157,6 +138,8 @@ fn main() {
             println!("Training batch loss: {loss:.3}");
         }
     });
+
+    let mut optimizer = Sgd::new_with_momentum(0.9);
 
     for _epoch in 0..num_epochs {
         items.shuffle(&mut rng);
@@ -183,7 +166,7 @@ fn main() {
             let loss = cross_entropy_loss(logits, labels);
 
             let grads = loss.backward();
-            model.update_weights(grads, lr);
+            optimizer.step(&mut model, &grads, lr);
 
             loss.async_start_eval();
             println!("Recorded in {:.2?}", start.elapsed());

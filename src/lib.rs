@@ -12,8 +12,11 @@ pub mod device;
 mod cache;
 pub mod conv;
 pub mod error;
+pub mod initializer;
 pub mod module;
+pub mod modules;
 pub mod opgraph;
+pub mod optimizer;
 mod raw_tensor;
 mod shape;
 mod tensor;
@@ -36,3 +39,5 @@ pub use self::{
 pub use half::{bf16, f16};
 #[doc(inline)]
 pub use helium_macros::Module;
+
+extern crate self as helium;

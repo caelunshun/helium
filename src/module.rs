@@ -4,6 +4,7 @@ use crate::{
     DataType, Device, Param, Tensor,
 };
 use serde::{Deserialize, Serialize};
+use std::array;
 
 pub mod record;
 
@@ -97,6 +98,42 @@ impl<T: Module> Module for Vec<T> {
             modules.push(loader.load_submodule(&i.to_string(), device)?);
         }
         Ok(modules)
+    }
+
+    fn load_params(&mut self, loader: &mut impl ParamLoader) -> Result<(), RecordError> {
+        for (i, module) in self.iter_mut().enumerate() {
+            loader.load_submodule(&i.to_string(), module)?;
+        }
+        Ok(())
+    }
+}
+
+impl<const N: usize, T: Module> Module for [T; N] {
+    fn visit_params(&self, visitor: &mut impl ParamVisitor) {
+        for module in self {
+            module.visit_params(visitor);
+        }
+    }
+
+    fn visit_params_mut(&mut self, visitor: &mut impl ParamMutVisitor) {
+        for module in self {
+            module.visit_params_mut(visitor);
+        }
+    }
+
+    fn record(&self, recorder: &mut impl Recorder) -> Result<(), RecordError> {
+        for (i, module) in self.iter().enumerate() {
+            recorder.record_submodule(&i.to_string(), module)?;
+        }
+        Ok(())
+    }
+
+    fn load_config(loader: &mut impl ConfigLoader, device: Device) -> Result<Self, RecordError> {
+        let mut modules = array::from_fn(|_| Option::<T>::None);
+        for (i, module) in modules.iter_mut().enumerate() {
+            *module = Some(loader.load_submodule(&i.to_string(), device)?);
+        }
+        Ok(modules.map(|opt| opt.unwrap()))
     }
 
     fn load_params(&mut self, loader: &mut impl ParamLoader) -> Result<(), RecordError> {
