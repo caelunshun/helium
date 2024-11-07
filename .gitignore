@@ -2,5 +2,8 @@
 /data
 /kernel
 
+/resnet-train/data
+/resnet-train/preview
+
 .idea
 .vscode

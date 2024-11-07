@@ -16,6 +16,7 @@ use half::bf16;
 use helium::{
     conv::Conv2dParams,
     initializer::Initializer,
+    loss::cross_entropy_loss,
     modules::{batch_norm::ForwardMode, conv::Conv2dSettings, BatchNorm2d, Conv2d},
     optimizer::{sgd::Sgd, Optimizer},
     DataType, Device, Module, Tensor,
@@ -55,6 +56,28 @@ impl Model {
                 make_settings(Conv2dParams {
                     kernel_size: [3, 3],
                     in_channels: 3,
+                    out_channels: 16,
+                    ..Default::default()
+                }),
+                rng,
+                device,
+            ),
+            Conv2d::new(
+                make_settings(Conv2dParams {
+                    kernel_size: [3, 3],
+                    stride: [2, 2],
+                    in_channels: 16,
+                    out_channels: 32,
+                    ..Default::default()
+                }),
+                rng,
+                device,
+            ),
+            Conv2d::new(
+                make_settings(Conv2dParams {
+                    kernel_size: [3, 3],
+                    stride: [2, 2],
+                    in_channels: 32,
                     out_channels: 64,
                     ..Default::default()
                 }),
@@ -66,29 +89,7 @@ impl Model {
                     kernel_size: [3, 3],
                     stride: [2, 2],
                     in_channels: 64,
-                    out_channels: 128,
-                    ..Default::default()
-                }),
-                rng,
-                device,
-            ),
-            Conv2d::new(
-                make_settings(Conv2dParams {
-                    kernel_size: [3, 3],
-                    stride: [2, 2],
-                    in_channels: 128,
-                    out_channels: 256,
-                    ..Default::default()
-                }),
-                rng,
-                device,
-            ),
-            Conv2d::new(
-                make_settings(Conv2dParams {
-                    kernel_size: [3, 3],
-                    stride: [2, 2],
-                    in_channels: 256,
-                    out_channels: 256,
+                    out_channels: 64,
                     ..Default::default()
                 }),
                 rng,
@@ -98,7 +99,7 @@ impl Model {
                 make_settings(Conv2dParams {
                     kernel_size: [3, 3],
                     stride: [1, 1],
-                    in_channels: 256,
+                    in_channels: 64,
                     out_channels: 10,
                     ..Default::default()
                 }),
@@ -129,21 +130,6 @@ impl Model {
             .reduce_mean::<3>(2)
             .reshape([batch_size, 10])
     }
-}
-
-fn log_softmax(x: Tensor<2>) -> Tensor<2> {
-    let max = x.reduce_max::<2>(1).broadcast_to(x.shape());
-    &x - &max
-        - (&x - max)
-            .exp()
-            .reduce_sum::<2>(1)
-            .log()
-            .broadcast_to(x.shape())
-}
-
-fn cross_entropy_loss(logits: Tensor<2>, targets: Tensor<2>) -> Tensor<1> {
-    let [batch_size, ..] = logits.shape();
-    -(log_softmax(logits) * targets).reduce_sum::<1>(2) / batch_size as f32
 }
 
 const IMAGE_DIM: usize = 32;
@@ -227,7 +213,7 @@ fn augment_image(
     _num_channels: usize,
     rng: &mut impl Rng,
 ) {
-    let noise_distr = Normal::new(0.0f32, rng.gen_range(0.001..0.3)).unwrap();
+    let noise_distr = Normal::new(0.0f32, rng.gen_range(0.001..0.1)).unwrap();
     for sample in image {
         *sample = bf16::from_f32((sample.to_f32() + noise_distr.sample(rng)).clamp(0.0, 1.0));
     }
@@ -279,7 +265,7 @@ fn main() {
 
     // Initial learning rate at "warm-up" for first few epochs
     let mut lr = 1e-2;
-    let lr_gamma = 0.99;
+    let lr_gamma = 0.995;
     let num_epochs = 200;
     let batch_size = 1024;
 
@@ -296,15 +282,21 @@ fn main() {
 
             if epoch == 5 {
                 // End warmup phase
-                lr = 5e-1;
+                lr = 1e0;
             }
 
             let (batch_tx, batch_rx) = flume::bounded(16);
             let training_data = &training_data;
             let mut reg_rng = Pcg64Mcg::from_rng(&mut rng).unwrap();
             s.spawn(move || {
-                for items in training_data.chunks_exact(batch_size) {
-                    let mut regularized_items = items.to_vec();
+                let mut indexes = (0..training_data.len()).collect::<Vec<_>>();
+                indexes.shuffle(&mut reg_rng);
+                for index_chunk in indexes.chunks_exact(batch_size) {
+                    let mut regularized_items: Vec<DataItem> = index_chunk
+                        .iter()
+                        .copied()
+                        .map(|i| training_data[i].clone())
+                        .collect();
                     regularized_items.iter_mut().for_each(|item| {
                         augment_image(
                             &mut item.image,
@@ -316,7 +308,10 @@ fn main() {
                     });
 
                     let batch = Batch::new(&regularized_items, device);
-                    let labels = items.iter().map(|item| item.label).collect::<Vec<_>>();
+                    let labels = regularized_items
+                        .iter()
+                        .map(|item| item.label)
+                        .collect::<Vec<_>>();
                     batch_tx.send((batch, labels)).ok();
                 }
             });
@@ -359,7 +354,7 @@ fn main() {
                     .forward(batch.images, ForwardMode::Train)
                     .to_data_type(DataType::F32);
                 let loss = cross_entropy_loss(logits.clone(), batch.labels);
-                let probs = log_softmax(logits).exp();
+                let probs = logits.log_softmax().exp();
                 loss.async_start_eval();
 
                 let grads = loss.backward();
@@ -397,13 +392,12 @@ fn main() {
     let validation_batch_size = 2_500;
     for batch in validation_data.chunks(validation_batch_size) {
         let tensor_batch = Batch::new(batch, device);
-        let output = log_softmax(
-            model
-                .forward(tensor_batch.images, ForwardMode::Inference)
-                .to_data_type(DataType::F32),
-        )
-        .exp()
-        .detach();
+        let output = model
+            .forward(tensor_batch.images, ForwardMode::Inference)
+            .to_data_type(DataType::F32)
+            .log_softmax()
+            .exp()
+            .detach();
         let output = output.to_vec::<f32>();
         assert_eq!(output.len(), batch.len() * 10);
         for (item, probs) in batch.iter().zip(output.chunks_exact(10)) {

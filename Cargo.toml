@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "macros"]
+members = [".", "macros", "resnet-train"]
 
 [package]
 name = "helium"

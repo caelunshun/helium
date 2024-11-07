@@ -521,6 +521,18 @@ impl<const D: usize> Tensor<D, Float> {
     }
 }
 
+impl Tensor<2, Float> {
+    pub fn log_softmax(&self) -> Tensor<2> {
+        let max = self.reduce_max::<2>(1).broadcast_to(self.shape());
+        self - &max
+            - (self - max)
+                .exp()
+                .reduce_sum::<2>(1)
+                .log()
+                .broadcast_to(self.shape())
+    }
+}
+
 impl<const D: usize, C: DataClassTrait> Debug for Tensor<D, C> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Tensor").field("raw", &self.raw).finish()

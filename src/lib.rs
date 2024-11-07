@@ -13,6 +13,7 @@ mod cache;
 pub mod conv;
 pub mod error;
 pub mod initializer;
+pub mod loss;
 pub mod module;
 pub mod modules;
 pub mod opgraph;
