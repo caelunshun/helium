@@ -107,13 +107,19 @@ impl LossData {
             loss: Vec::with_capacity(self.loss.len()),
             accuracy: Vec::with_capacity(self.accuracy.len()),
         };
-        let mut moving_average_loss = 0.0f32;
-        let mut moving_average_accuracy = 0.0f32;
+        let mut moving_average_loss = None;
+        let mut moving_average_accuracy = None;
         for (loss, accuracy) in self.loss.iter().copied().zip(self.accuracy.iter().copied()) {
-            moving_average_loss = 0.8 * moving_average_loss + 0.2 * loss;
-            moving_average_accuracy = 0.8 * moving_average_accuracy + 0.2 * accuracy;
-            target.loss.push(moving_average_loss);
-            target.accuracy.push(moving_average_accuracy);
+            moving_average_loss = Some(match moving_average_loss {
+                Some(avg) => 0.8 * avg + 0.2 * loss,
+                None => loss,
+            });
+            moving_average_accuracy = Some(match moving_average_accuracy {
+                Some(avg) => 0.8 * avg + 0.2 * accuracy,
+                None => accuracy,
+            });
+            target.loss.push(moving_average_loss.unwrap());
+            target.accuracy.push(moving_average_accuracy.unwrap());
         }
         target
     }

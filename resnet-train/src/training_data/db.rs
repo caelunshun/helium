@@ -1,7 +1,10 @@
 use anyhow::{bail, Context};
-use redb::{AccessGuard, Durability, ReadableTable, TableDefinition, WriteTransaction};
+use redb::{
+    backends::FileBackend, AccessGuard, Durability, ReadableTable, StorageBackend, TableDefinition,
+    WriteTransaction,
+};
 use serde::{Deserialize, Serialize};
-use std::{fs, path::Path};
+use std::{fs, fs::File, io::Error, path::Path};
 use uuid::Uuid;
 
 pub struct Database {
@@ -15,6 +18,13 @@ impl Database {
     pub fn open(path: impl AsRef<Path>) -> anyhow::Result<Self> {
         Ok(Self {
             db: redb::Database::open(path.as_ref())?,
+        })
+    }
+
+    pub fn open_read_only(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+        Ok(Self {
+            db: redb::Builder::new()
+                .create_with_backend(ReadOnlyFileBackend(FileBackend::new(File::open(path)?)?))?,
         })
     }
 
@@ -117,4 +127,29 @@ pub enum Split {
     Training,
     Validation,
     Test,
+}
+
+#[derive(Debug)]
+struct ReadOnlyFileBackend(FileBackend);
+
+impl StorageBackend for ReadOnlyFileBackend {
+    fn len(&self) -> Result<u64, Error> {
+        self.0.len()
+    }
+
+    fn read(&self, offset: u64, len: usize) -> Result<Vec<u8>, Error> {
+        self.0.read(offset, len)
+    }
+
+    fn set_len(&self, _len: u64) -> Result<(), Error> {
+        Ok(())
+    }
+
+    fn sync_data(&self, _eventual: bool) -> Result<(), Error> {
+        Ok(())
+    }
+
+    fn write(&self, _offset: u64, _data: &[u8]) -> Result<(), Error> {
+        Ok(())
+    }
 }

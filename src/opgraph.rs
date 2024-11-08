@@ -157,6 +157,10 @@ impl OpGraph {
         self.inputs.contains(&id)
     }
 
+    pub fn num_nodes(&self) -> usize {
+        self.nodes.len()
+    }
+
     /// Removes unused operations and inputs.
     pub fn optimize(&mut self) {
         self.prune_unused();

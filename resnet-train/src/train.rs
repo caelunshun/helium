@@ -182,6 +182,28 @@ fn recv_batch(receiver: &Receiver<ItemOrEpochEnd>, batch_size: usize) -> Option<
     Some(items)
 }
 
+fn start_batcher_thread(
+    receiver: Receiver<ItemOrEpochEnd>,
+    batch_size: usize,
+    device: Device,
+) -> anyhow::Result<flume::Receiver<Batch>> {
+    let (tx, rx) = flume::bounded(2);
+    thread::Builder::new()
+        .name("batcher".to_owned())
+        .spawn(move || loop {
+            match recv_batch(&receiver, batch_size) {
+                Some(items) => {
+                    let batch = Batch::new(items, device);
+                    if tx.send(batch).is_err() {
+                        return;
+                    }
+                }
+                None => return,
+            }
+        })?;
+    Ok(rx)
+}
+
 fn top_1_accuracy(batch: &Batch, probs: &[f32]) -> f32 {
     let mut num_correct = 0;
     for (item, probs) in batch.items.iter().zip(probs.chunks_exact(NUM_CLASSES)) {
@@ -206,13 +228,13 @@ pub fn train() -> anyhow::Result<()> {
     let mut model = Model::new(&mut rng, device);
     let mut optimizer = Sgd::new_with_momentum(0.9);
 
-    let db = Arc::new(Database::open(DEFAULT_DB_PATH)?);
+    let db = Arc::new(Database::open_read_only(DEFAULT_DB_PATH)?);
 
     let items_training = start_data_loader_threads(&db, Split::Training, &mut rng)?;
     let items_validation = start_data_loader_threads(&db, Split::Validation, &mut rng)?;
 
     let num_epochs = 200;
-    let batch_size = 32;
+    let batch_size = 64;
     let mut lr = 1e-2;
     let lr_gamma = 0.99;
 
@@ -222,6 +244,9 @@ pub fn train() -> anyhow::Result<()> {
         for epoch in 0..num_epochs {
             tracing::info!(epoch, "begin epoch");
             let mut batch_idx = 0;
+
+            let batches_training =
+                start_batcher_thread(items_training.clone(), batch_size, device)?;
 
             struct TrainingResult {
                 loss: Tensor<1>,
@@ -268,8 +293,7 @@ pub fn train() -> anyhow::Result<()> {
                 }
             });
 
-            while let Some(training_items) = recv_batch(&items_training, batch_size) {
-                let batch = Batch::new(training_items, device);
+            for batch in batches_training {
                 let logits = model
                     .forward(&batch.image_tensor, ForwardMode::Train)
                     .to_data_type(DataType::F32);
@@ -290,14 +314,15 @@ pub fn train() -> anyhow::Result<()> {
                         index: batch_idx * batch_size,
                     })
                     .unwrap();
-
                 batch_idx += 1;
             }
             drop(results_tx);
             results_thread.join().unwrap();
+
+            let batches_validation =
+                start_batcher_thread(items_validation.clone(), batch_size, device)?;
             tracing::info!(epoch, "begin validation");
-            while let Some(validation_items) = recv_batch(&items_validation, batch_size) {
-                let batch = Batch::new(validation_items, device);
+            for batch in batches_validation {
                 let logits = model
                     .forward(&batch.image_tensor, ForwardMode::Train)
                     .to_data_type(DataType::F32);

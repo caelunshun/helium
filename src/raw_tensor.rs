@@ -13,6 +13,7 @@ use crate::{
     },
     shape::Shape,
 };
+use ahash::AHashMap;
 use parking_lot::Mutex;
 use slotmap::{Key, SecondaryMap};
 use std::{
@@ -197,13 +198,13 @@ impl RawTensor {
             );
         }
 
-        let (graph, lhs) = self.make_graph();
-        let rhs = rhs.to_graph(&graph);
+        let (cx, _) = self.make_graph();
+        let cx = rhs.to_graph(cx);
         Self::from_op(
-            &graph,
+            &cx,
             Op::Matmul(op::Matmul {
-                input_a: lhs,
-                input_b: rhs,
+                input_a: self.node(&cx),
+                input_b: rhs.node(&cx),
             }),
         )
     }
@@ -256,14 +257,14 @@ impl RawTensor {
             "conv2d only supports float data types"
         );
 
-        let (cx, image) = self.make_graph();
-        let filter = filter.to_graph(&cx);
+        let (cx, _) = self.make_graph();
+        let cx = filter.to_graph(cx);
         Self::from_op(
             &cx,
             Op::Conv(op::Conv {
                 settings,
-                image,
-                filter,
+                image: self.node(&cx),
+                filter: filter.node(&cx),
             }),
         )
     }
@@ -276,14 +277,14 @@ impl RawTensor {
     ) -> Self {
         // TODO: validation
         // (this function is only used internally by Tensor autodiff)
-        let (cx, flow) = self.make_graph();
-        let filter = filter.to_graph(&cx);
+        let (cx, _) = self.make_graph();
+        let cx = filter.to_graph(cx);
         Self::from_op(
             &cx,
             Op::ConvBackwardData(op::ConvBackwardData {
                 settings,
-                flow,
-                filter,
+                flow: self.node(&cx),
+                filter: filter.node(&cx),
                 input_size,
             }),
         )
@@ -292,14 +293,14 @@ impl RawTensor {
     pub fn conv2d_backward_filter(self, image: Self, settings: Conv2dParams) -> Self {
         // TODO: validation
         // (this function is only used internally by Tensor autodiff)
-        let (cx, flow) = self.make_graph();
-        let image = image.to_graph(&cx);
+        let (cx, _) = self.make_graph();
+        let cx = image.to_graph(cx);
         Self::from_op(
             &cx,
             Op::ConvBackwardFilter(op::ConvBackwardFilter {
                 settings,
-                flow,
-                image,
+                flow: self.node(&cx),
+                image: image.node(&cx),
             }),
         )
     }
@@ -483,9 +484,16 @@ impl RawTensor {
             rhs.data_type().class(),
             "mismatched data class for compare op {op:?}"
         );
-        let (cx, this) = self.make_graph();
-        let rhs = rhs.to_graph(&cx);
-        Self::from_op(&cx, Op::Compare(op::Compare { op, lhs: this, rhs }))
+        let (cx, _) = self.make_graph();
+        let cx = rhs.to_graph(cx);
+        Self::from_op(
+            &cx,
+            Op::Compare(op::Compare {
+                op,
+                lhs: self.node(&cx),
+                rhs: rhs.node(&cx),
+            }),
+        )
     }
 
     pub fn compare_equal(self, rhs: Self) -> Self {
@@ -530,16 +538,16 @@ impl RawTensor {
             "data class mismatch for select"
         );
 
-        let (cx, this) = self.make_graph();
-        let true_case = true_case.to_graph(&cx);
-        let false_case = false_case.to_graph(&cx);
+        let (cx, _) = self.make_graph();
+        let cx = true_case.to_graph(cx);
+        let cx = false_case.to_graph(cx);
 
         Self::from_op(
             &cx,
             Op::Select(op::Select {
-                lhs: false_case,
-                rhs: true_case,
-                selector: this,
+                lhs: false_case.node(&cx),
+                rhs: true_case.node(&cx),
+                selector: self.node(&cx),
             }),
         )
     }
@@ -716,31 +724,37 @@ impl RawTensor {
         }
     }
 
+    fn node(&self, cx: &OpGraphBuilderHandle) -> NodeId {
+        match &self.inner.lock().data {
+            Data::Virtual(virt) => {
+                debug_assert!(Arc::ptr_eq(cx, &virt.graph));
+                virt.node
+            }
+            Data::Concrete(_) => cx.lock().inputs_memoized[&(Arc::as_ptr(&self.inner) as usize)],
+        }
+    }
+
     /// Moves the tensor onto the given graph. If the tensor
     /// is concrete, this registers the tensor as an input
     /// to the graph. If the tensor is virtual, then we merge
     /// the two graphs if they differ.
-    fn to_graph(&self, builder: &OpGraphBuilderHandle) -> NodeId {
+    fn to_graph(&self, builder: OpGraphBuilderHandle) -> OpGraphBuilderHandle {
         let guard = self.inner.lock();
         match &guard.data {
             Data::Virtual(virt) => {
-                if Arc::ptr_eq(&virt.graph, builder) {
-                    virt.node
+                if Arc::ptr_eq(&virt.graph, &builder) {
+                    builder
                 } else {
                     let cx2 = virt.graph.clone();
                     drop(guard);
-                    cx2.lock().merge_into(builder);
-                    let guard = self.inner.lock();
-                    let Data::Virtual(virt) = &guard.data else {
-                        unreachable!()
-                    };
-                    virt.node
+                    OpGraphBuilder::merge(cx2, builder)
                 }
             }
             Data::Concrete(_) => {
                 builder
                     .lock()
-                    .new_input(guard.shape(), guard.data_type(), &self.inner)
+                    .new_input(guard.shape(), guard.data_type(), &self.inner);
+                builder
             }
         }
     }
@@ -753,12 +767,13 @@ impl RawTensor {
             self.shape(),
             rhs.shape()
         );
-        let (cx, this) = self.make_graph();
+        let (cx, _) = self.make_graph();
+        let cx = rhs.to_graph(cx);
         RawTensor::from_op(
             &cx,
             Op::BinaryPointwise(BinaryPointwise {
-                lhs: this,
-                rhs: rhs.to_graph(&cx),
+                lhs: self.node(&cx),
+                rhs: rhs.node(&cx),
                 op,
             }),
         )
@@ -890,6 +905,9 @@ struct OpGraphBuilder {
     device: Device,
     op_graph: OpGraph,
     inputs: SecondaryMap<NodeId, Arc<Mutex<TensorInner>>>,
+    /// Maps address of TensorInner to the node representing
+    /// it, for input (concrete) tensors.
+    inputs_memoized: AHashMap<usize, NodeId>,
     node_to_tensor: SecondaryMap<NodeId, Weak<Mutex<TensorInner>>>,
 }
 
@@ -899,32 +917,51 @@ impl OpGraphBuilder {
             device,
             op_graph: OpGraph::new(),
             inputs: SecondaryMap::default(),
+            inputs_memoized: AHashMap::default(),
             node_to_tensor: SecondaryMap::default(),
         }
     }
 
-    pub fn merge_into(&mut self, other_handle: &OpGraphBuilderHandle) {
-        let mut other = other_handle.lock();
-        let node_mapping = self.op_graph.merge_into(&mut other.op_graph);
+    pub fn merge(
+        first_handle: OpGraphBuilderHandle,
+        second_handle: OpGraphBuilderHandle,
+    ) -> OpGraphBuilderHandle {
+        let mut first = first_handle.lock();
+        let mut second = second_handle.lock();
 
-        for (old_node_id, tensor) in &self.node_to_tensor {
+        if first.op_graph.num_nodes() > second.op_graph.num_nodes() {
+            drop(first);
+            drop(second);
+            return Self::merge(second_handle, first_handle);
+        }
+
+        let node_mapping = first.op_graph.merge_into(&mut second.op_graph);
+
+        for (old_node_id, tensor) in &first.node_to_tensor {
             let new_node_id = node_mapping[old_node_id];
             if let Some(tensor) = tensor.upgrade() {
                 let mut guard = tensor.lock();
                 if let Data::Virtual(virt) = &mut guard.data {
-                    virt.graph = Arc::clone(other_handle);
+                    virt.graph = Arc::clone(&second_handle);
                     virt.node = new_node_id;
                 }
             }
-            other.node_to_tensor.insert(new_node_id, tensor.clone());
+            second.node_to_tensor.insert(new_node_id, tensor.clone());
         }
 
-        for (old_input_id, tensor) in self.inputs.drain() {
+        for (old_input_id, tensor) in first.inputs.drain() {
             let new_input_id = node_mapping[old_input_id];
-            other.inputs.insert(new_input_id, tensor);
+            second.inputs.insert(new_input_id, tensor);
         }
 
-        self.node_to_tensor.clear();
+        for (addr, node) in first.inputs_memoized.drain() {
+            second.inputs_memoized.insert(addr, node_mapping[node]);
+        }
+
+        first.node_to_tensor.clear();
+
+        drop(second);
+        second_handle
     }
 
     pub fn new_input(
@@ -933,10 +970,15 @@ impl OpGraphBuilder {
         data_type: DataType,
         tensor: &Arc<Mutex<TensorInner>>,
     ) -> NodeId {
-        let id = self.op_graph.new_input(Descriptor { shape, data_type });
-        self.inputs.insert(id, Arc::clone(tensor));
-        self.node_to_tensor.insert(id, Arc::downgrade(tensor));
-        id
+        *self
+            .inputs_memoized
+            .entry(Arc::as_ptr(tensor) as usize)
+            .or_insert_with(|| {
+                let id = self.op_graph.new_input(Descriptor { shape, data_type });
+                self.inputs.insert(id, Arc::clone(tensor));
+                self.node_to_tensor.insert(id, Arc::downgrade(tensor));
+                id
+            })
     }
 
     pub fn new_op(&mut self, op: Op, owner: &Arc<Mutex<TensorInner>>) -> NodeId {
