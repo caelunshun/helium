@@ -1,3 +1,4 @@
+use rand::Rng;
 use slotmap::SlotMap;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -40,6 +41,24 @@ impl BlockAllocator {
     ) -> Option<Block> {
         assert!(size > 0);
         assert!(align.is_power_of_two());
+
+        #[cfg(feature = "cuda-debug")]
+        if rand::thread_rng().gen_bool(0.0001) {
+            tracing::debug!(
+                num_sizes = self.free_blocks_by_size.len(),
+                num_free_blocks = self.free_blocks.len(),
+                num_pages = self.pages.len(),
+                num_streams = self.streams.len(),
+                "allocator state"
+            );
+            for block in self.free_blocks.values() {
+                assert!(block
+                    .in_use_by_streams
+                    .iter()
+                    .copied()
+                    .all(|s| self.streams.contains_key(s)));
+            }
+        }
 
         for (_, size_class) in self.free_blocks_by_size.range(size..) {
             for &block_id in size_class {
@@ -120,13 +139,13 @@ impl BlockAllocator {
             if block.can_merge(adjacent) {
                 let adjacent = adjacent.clone();
                 block = block.merge(self.free_blocks.remove(adjacent_id).unwrap());
-                assert!(
-                    self.free_blocks_by_size
-                        .get_mut(&adjacent.size)
-                        .unwrap()
-                        .remove(&adjacent_id),
-                    "not present in size index"
-                );
+
+                let size_class = self.free_blocks_by_size.get_mut(&adjacent.size).unwrap();
+                assert!(size_class.remove(&adjacent_id), "not present in size index");
+                if size_class.is_empty() {
+                    self.free_blocks_by_size.remove(&adjacent.size);
+                }
+
                 page.free_blocks_by_addr
                     .remove(&adjacent.start)
                     .expect("not present in addr index");

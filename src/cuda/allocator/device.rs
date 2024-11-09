@@ -99,6 +99,12 @@ impl DeviceAllocator {
         assert!(align.is_power_of_two());
         assert!(align <= Self::MAX_ALIGN);
 
+        // Round the size up to the alignment to avoid
+        // causing allocator fragmentation in cases
+        // where the size is very small but the alignment
+        // is large.
+        let size = size.div_ceil(align) * align;
+
         unsafe {
             driver::result::ctx::set_current(self.context)?;
         }
@@ -117,9 +123,9 @@ impl DeviceAllocator {
         let page = &self.pages[block.page];
         let ptr = page.ptr + block.start;
 
-        assert_eq!(block.size, size);
-        assert!(block.is_aligned_to(align));
-        assert!(block.start + size <= page.size);
+        debug_assert_eq!(block.size, size);
+        debug_assert!(block.is_aligned_to(align));
+        debug_assert!(block.start + size <= page.size);
 
         Ok(DeviceMemory {
             ptr,

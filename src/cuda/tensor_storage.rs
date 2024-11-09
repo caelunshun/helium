@@ -27,6 +27,7 @@ impl TensorStorageId {
 #[derive(Clone)]
 pub struct TensorStorage {
     memory: Arc<DeviceMemory>,
+    num_bytes: usize,
     data_type: DataType,
     id: TensorStorageId,
 
@@ -64,6 +65,7 @@ impl TensorStorage {
         };
         Ok(Self {
             id: TensorStorageId::new(),
+            num_bytes,
             memory: Arc::new(memory),
             data_type,
             ready_event: Arc::new(CudaEvent::new()?),
@@ -80,7 +82,7 @@ impl TensorStorage {
         data: DataSlice,
         stream: &CudaStream,
     ) -> Result<(), CudaError> {
-        assert_eq!(data.as_bytes().len(), self.memory.len() as usize);
+        assert_eq!(data.as_bytes().len(), self.num_bytes);
         let bytes: &[u8] = data.as_bytes();
 
         // Copy to page-locked memory for true asynchronous transfer.
@@ -112,7 +114,7 @@ impl TensorStorage {
         callback: impl FnOnce(DataVec) + Send + 'static,
     ) -> Result<(), CudaError> {
         // First copy to page-locked memory, then to normal Vec memory.
-        let num_bytes = usize::try_from(self.memory.len()).unwrap();
+        let num_bytes = self.num_bytes;
         let page_locked = HostPinnedAllocator::global()
             .alloc(Layout::from_size_align(num_bytes, Self::PAGE_LOCKED_MEM_ALIGNMENT).unwrap())?;
         unsafe {
@@ -172,7 +174,7 @@ impl TensorStorage {
                     .cuMemsetD16Async(
                         self.device_ptr(),
                         f16::from_f32(value).to_bits(),
-                        (self.memory.len() / mem::size_of::<f32>() as u64) as usize,
+                        self.num_bytes / mem::size_of::<f32>(),
                         stream.raw(),
                     )
                     .result()?;
@@ -182,7 +184,7 @@ impl TensorStorage {
                     .cuMemsetD16Async(
                         self.device_ptr(),
                         bf16::from_f32(value).to_bits(),
-                        (self.memory.len() / mem::size_of::<f32>() as u64) as usize,
+                        self.num_bytes / mem::size_of::<f32>(),
                         stream.raw(),
                     )
                     .result()?;
@@ -192,7 +194,7 @@ impl TensorStorage {
                     .cuMemsetD32Async(
                         self.device_ptr(),
                         value.to_bits(),
-                        (self.memory.len() / mem::size_of::<f32>() as u64) as usize,
+                        self.num_bytes / mem::size_of::<f32>(),
                         stream.raw(),
                     )
                     .result()?;
@@ -202,12 +204,7 @@ impl TensorStorage {
                 let mask = if b { 0xFF } else { 0 };
                 unsafe {
                     driver::sys::lib()
-                        .cuMemsetD8Async(
-                            self.device_ptr(),
-                            mask,
-                            self.memory.len() as usize,
-                            stream.raw(),
-                        )
+                        .cuMemsetD8Async(self.device_ptr(), mask, self.num_bytes, stream.raw())
                         .result()?;
                 }
             }
