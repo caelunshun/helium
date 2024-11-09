@@ -1,3 +1,4 @@
+pub mod augmentation;
 pub mod db;
 pub mod download;
 

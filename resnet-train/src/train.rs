@@ -2,6 +2,7 @@ use crate::{
     model::{Model, NUM_CLASSES},
     train::preview::{Example, Previewer},
     training_data::{
+        augmentation::augment_training_image,
         db::{Database, Split},
         DEFAULT_DB_PATH,
     },
@@ -120,6 +121,7 @@ fn start_data_loader_threads(
         tx: Sender<ItemOrEpochEnd>,
         epoch_sync: &Barrier,
         seed: u128,
+        split: Split,
     ) {
         let mut rng = Pcg64Mcg::from_seed(seed.to_le_bytes());
         loop {
@@ -133,7 +135,12 @@ fn start_data_loader_threads(
 
             let shuffled_ids = shuffled_ids.read();
             for i in (thread_index..shuffled_ids.len()).step_by(num_threads) {
-                let item = Item::from_db(db, shuffled_ids[i]).expect("failed to load item");
+                let mut item = Item::from_db(db, shuffled_ids[i]).expect("failed to load item");
+
+                if split == Split::Training {
+                    item.image = Arc::new(augment_training_image(&item.image, &mut rng));
+                }
+
                 if tx.send(ItemOrEpochEnd::Item(item)).is_err() {
                     return;
                 }
@@ -164,6 +171,7 @@ fn start_data_loader_threads(
                     tx,
                     &epoch_sync,
                     seed,
+                    split,
                 );
             })?;
     }
@@ -235,7 +243,7 @@ pub fn train() -> anyhow::Result<()> {
 
     let num_epochs = 200;
     let batch_size = 64;
-    let mut lr = 1e-2;
+    let mut lr = 1e-1;
     let lr_gamma = 0.99;
 
     let previewer = Previewer::new()?;
@@ -277,7 +285,7 @@ pub fn train() -> anyhow::Result<()> {
                         .enumerate()
                         .zip(probs.chunks_exact(NUM_CLASSES))
                     {
-                        if rng_fork.gen_bool(0.01) {
+                        if rng_fork.gen_bool(0.005) {
                             previewer.add_example(Example {
                                 epoch,
                                 iteration: index + i,
@@ -289,7 +297,7 @@ pub fn train() -> anyhow::Result<()> {
                     }
 
                     previewer.add_train_iteration(loss, accuracy);
-                    tracing::debug!(loss, accuracy, "step");
+                    tracing::debug!(epoch, loss, accuracy, "step");
                 }
             });
 

@@ -1,3 +1,4 @@
+#[cfg(feature = "cuda-debug")]
 use rand::Rng;
 use slotmap::SlotMap;
 use std::collections::{BTreeMap, BTreeSet};

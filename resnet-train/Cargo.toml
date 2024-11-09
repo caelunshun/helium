@@ -26,3 +26,6 @@ parking_lot = "0.12"
 indexmap = { version = "2", features = ["serde"] }
 flume = "0.11"
 thread-priority = "1"
+imageproc = { version = "0.25", default-features = false, features = ["rayon"] }
+palette = "0.7"
+rand_distr = "0.4"

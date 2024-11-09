@@ -8,7 +8,7 @@ use serde::Serialize;
 use std::{
     array, fs,
     fs::File,
-    io::BufWriter,
+    io::{BufWriter, Write},
     mem,
     sync::{Arc, OnceLock},
     thread,
@@ -82,6 +82,31 @@ fn run_processor_thread(previewer: &Previewer) {
                     ACCURACY_PLOT_FILE,
                 )
                 .expect("failed to generate accuracy plot");
+
+                generate_csv(
+                    "training-loss",
+                    &train_data.loss,
+                    "preview/training-loss.csv",
+                )
+                .unwrap();
+                generate_csv(
+                    "validation-loss",
+                    &validation_data.loss,
+                    "preview/validation-loss.csv",
+                )
+                .unwrap();
+                generate_csv(
+                    "training-accuracy",
+                    &train_data.accuracy,
+                    "preview/training-accuracy.csv",
+                )
+                .unwrap();
+                generate_csv(
+                    "validation-accuracy",
+                    &validation_data.accuracy,
+                    "preview/validation-accuracy.csv",
+                )
+                .unwrap();
             },
             || {
                 let examples = mem::take(&mut *previewer.example_queue.lock());
@@ -109,13 +134,14 @@ impl LossData {
         };
         let mut moving_average_loss = None;
         let mut moving_average_accuracy = None;
+        let gamma = 0.975;
         for (loss, accuracy) in self.loss.iter().copied().zip(self.accuracy.iter().copied()) {
             moving_average_loss = Some(match moving_average_loss {
-                Some(avg) => 0.8 * avg + 0.2 * loss,
+                Some(avg) => gamma * avg + (1.0 - gamma) * loss,
                 None => loss,
             });
             moving_average_accuracy = Some(match moving_average_accuracy {
-                Some(avg) => 0.8 * avg + 0.2 * accuracy,
+                Some(avg) => gamma * avg + (1.0 - gamma) * accuracy,
                 None => accuracy,
             });
             target.loss.push(moving_average_loss.unwrap());
@@ -233,6 +259,19 @@ fn generate_plot(
 
     root.present()?;
 
+    Ok(())
+}
+
+fn generate_csv(name: &str, data: &[f32], output_path: &str) -> anyhow::Result<()> {
+    let mut writer = BufWriter::new(File::create(output_path)?);
+
+    writer.write_all(format!("i,{name}\n").as_bytes())?;
+
+    for (x, y) in data.iter().copied().enumerate() {
+        writer.write_all(format!("{x},{y}\n").as_bytes())?;
+    }
+
+    writer.flush()?;
     Ok(())
 }
 
