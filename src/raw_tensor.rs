@@ -1,7 +1,8 @@
 use crate::{
     backend::{Backend, BackendExt},
+    cache::Cache,
     conv::Conv2dParams,
-    data_type::{AsDataSlice, DataClass, DataType, DataVec, Scalar},
+    data_type::{AsDataSlice, DataClass, DataSlice, DataType, DataVec, Scalar},
     device::Device,
     opgraph::{
         op,
@@ -64,6 +65,17 @@ impl RawTensor {
         let slice = slice.as_data_slice();
         let shape = shape.into();
 
+        if slice.len() == 1 {
+            static SCALAR_CACHE: Cache<(Device, Scalar), RawTensor> = Cache::with_capacity(16384);
+            SCALAR_CACHE.get_or_insert(&(device, slice.get(0)), move || {
+                Self::from_slice_impl(slice, shape, device)
+            })
+        } else {
+            Self::from_slice_impl(slice, shape, device)
+        }
+    }
+
+    fn from_slice_impl(slice: DataSlice, shape: Shape, device: Device) -> Self {
         if slice.data_type() == DataType::Bool {
             assert_eq!(
                 shape.num_elements(),

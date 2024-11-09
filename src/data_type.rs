@@ -280,6 +280,16 @@ impl<'a> DataSlice<'a> {
             DataSlice::Bool(_) => DataType::Bool,
         }
     }
+
+    pub fn get(&self, i: usize) -> Scalar {
+        match self {
+            DataSlice::F32(v) => Scalar::F32(v[i]),
+            DataSlice::Bf16(v) => Scalar::Bf16(v[i]),
+            DataSlice::F16(v) => Scalar::F16(v[i]),
+            DataSlice::U32(v) => Scalar::U32(v[i]),
+            DataSlice::Bool(v) => Scalar::Bool(v[i]),
+        }
+    }
 }
 
 impl<'a> From<&'a [f32]> for DataSlice<'a> {
