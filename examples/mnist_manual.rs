@@ -1,7 +1,7 @@
 use helium::{
     initializer::Initializer,
     modules::linear::{Linear, LinearSettings},
-    optimizer::{sgd::Sgd, Optimizer},
+    optimizer::{sgd::Sgd, Adam, AdamSettings, Optimizer},
     Device, Tensor,
 };
 use helium_macros::Module;
@@ -127,7 +127,7 @@ fn main() {
         .collect();
 
     let num_epochs = 20;
-    let mut lr = 1e0;
+    let mut lr = 1e-3;
     let lr_gamma = 0.97;
     let batch_size = 1024;
 
@@ -139,7 +139,7 @@ fn main() {
         }
     });
 
-    let mut optimizer = Sgd::new_with_momentum(0.9);
+    let mut optimizer = Adam::new(AdamSettings::default());
 
     for _epoch in 0..num_epochs {
         items.shuffle(&mut rng);
