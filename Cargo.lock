@@ -199,6 +199,7 @@ dependencies = [
 [[package]]
 name = "cudarc"
 version = "0.12.1"
+source = "git+https://github.com/caelunshun/cudarc?branch=program-file-name#368edb5cd670ea181ba029e751d8580ec6bd5084"
 dependencies = [
  "half",
  "libloading",
