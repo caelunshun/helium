@@ -150,7 +150,7 @@ fn derive_on_fields(fields: &Fields) -> Result<Statements, Error> {
                 let #field_ident = loader.load_submodule(#ident_str, device)?;
             });
             statements.load_params.push(quote! {
-                 <#field_ty as ::helium::module::Module>::load_tensors(#field_ident, loader)?;
+                 loader.load_submodule(#ident_str, #field_ident)?;
             });
         }
     }

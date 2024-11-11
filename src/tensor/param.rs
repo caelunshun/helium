@@ -1,5 +1,6 @@
 use crate::{tensor::tape::Tape, Tensor};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::str::FromStr;
 
 /// A model parameter tensor.
 ///
@@ -32,10 +33,6 @@ impl<const D: usize> Param<D> {
         &self.value
     }
 
-    pub(crate) fn value_mut(&mut self) -> &mut Tensor<D> {
-        &mut self.value
-    }
-
     pub fn into_value(self) -> Tensor<D> {
         self.value
     }
@@ -57,12 +54,33 @@ impl<const D: usize> From<Tensor<D>> for Param<D> {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ParamId(u128);
 
 impl ParamId {
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self(rand::random())
+    }
+}
+
+impl Serialize for ParamId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.0.to_string().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ParamId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        u128::from_str(&s)
+            .map_err(|e| serde::de::Error::custom(e.to_string()))
+            .map(Self)
     }
 }

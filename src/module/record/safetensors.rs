@@ -9,6 +9,7 @@ use bumpalo::Bump;
 use pollster::FutureExt;
 use safetensors::{tensor::TensorView, Dtype, SafeTensors};
 use serde::{de::DeserializeOwned, Serialize};
+use serde_json::Value;
 use std::{collections::HashMap, path::Path};
 
 /// Serializes a model to a `safetensors` file.
@@ -92,6 +93,8 @@ impl Recorder for SafetensorsRecorder {
     }
 
     fn record_submodule(&mut self, name: &str, submodule: &impl Module) -> Result<(), RecordError> {
+        self.get_current_metadata()
+            .insert(name.to_owned(), Value::Object(Default::default()));
         self.current_path.push(name.to_owned());
         submodule.record(self)?;
         self.current_path.pop();

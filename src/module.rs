@@ -27,7 +27,7 @@ pub trait Module: Sized + Send + Sync {
     /// Loads the module parameters.
     fn load_tensors(&mut self, loader: &mut impl TensorLoader) -> Result<(), RecordError>;
 
-    fn save_to_savetensors(&self, path: impl AsRef<Path>) -> Result<(), RecordError> {
+    fn save_to_safetensors(&self, path: impl AsRef<Path>) -> Result<(), RecordError> {
         let mut recorder = SafetensorsRecorder::new();
         self.record(&mut recorder)?;
         recorder.save_to_file(path)
@@ -226,7 +226,8 @@ impl<const D: usize> Module for Param<D> {
     }
 
     fn load_tensors(&mut self, loader: &mut impl TensorLoader) -> Result<(), RecordError> {
-        self.value_mut().load_tensors(loader)
+        self.set_value(loader.load_tensor::<D>("value", self.value().device())?);
+        Ok(())
     }
 }
 
