@@ -1,5 +1,5 @@
 use crate::{tensor::tape::Tape, Tensor};
-use std::sync::atomic::AtomicU64;
+use serde::{Deserialize, Serialize};
 
 /// A model parameter tensor.
 ///
@@ -15,6 +15,13 @@ impl<const D: usize> Param<D> {
         let id = ParamId::new();
         value.tape = Some(Tape::new_param(id, value.raw.clone()));
         Self { value, id }
+    }
+
+    pub(crate) fn new_with_id(value: Tensor<D>, id: ParamId) -> Self {
+        Self {
+            id,
+            ..Self::new(value)
+        }
     }
 
     pub fn id(&self) -> ParamId {
@@ -50,12 +57,12 @@ impl<const D: usize> From<Tensor<D>> for Param<D> {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub struct ParamId(u64);
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ParamId(u128);
 
 impl ParamId {
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        ParamId(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+        Self(rand::random())
     }
 }

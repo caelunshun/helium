@@ -2,14 +2,15 @@ use crate::{
     module::ParamMutVisitor, raw_tensor::RawTensor, DataType, Gradients, Module, Param, ParamId,
     Tensor,
 };
-use ahash::AHashMap;
 use helium::optimizer::Optimizer;
+use std::collections::BTreeMap;
 
 /// Stochastic gradient descent with optional classical
 /// momentum.
-#[derive(Default)]
+#[derive(Default, Clone, Module)]
 pub struct Sgd {
     gradient_averages: GradientAverages,
+    #[module(config)]
     momentum: Option<f32>,
 }
 
@@ -74,7 +75,7 @@ impl Optimizer for Sgd {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Module)]
 struct GradientAverages {
-    values: AHashMap<ParamId, RawTensor>,
+    values: BTreeMap<ParamId, RawTensor>,
 }

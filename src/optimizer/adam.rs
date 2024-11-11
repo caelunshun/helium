@@ -2,12 +2,16 @@ use crate::{
     module::ParamMutVisitor, optimizer::Optimizer, raw_tensor::RawTensor, Gradients, Module, Param,
     ParamId, Tensor,
 };
-use ahash::AHashMap;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
+#[derive(Clone, Module)]
 pub struct Adam {
-    first_moments: AHashMap<ParamId, RawTensor>,
-    second_moments: AHashMap<ParamId, RawTensor>,
+    first_moments: BTreeMap<ParamId, RawTensor>,
+    second_moments: BTreeMap<ParamId, RawTensor>,
+    #[module(config)]
     settings: AdamSettings,
+    #[module(config)]
     t: u64,
 }
 
@@ -15,8 +19,8 @@ impl Adam {
     pub fn new(settings: AdamSettings) -> Self {
         Self {
             settings,
-            first_moments: AHashMap::default(),
-            second_moments: AHashMap::default(),
+            first_moments: BTreeMap::default(),
+            second_moments: BTreeMap::default(),
             t: 1,
         }
     }
@@ -79,7 +83,7 @@ impl Optimizer for Adam {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdamSettings {
     pub beta1: f32,
     pub beta2: f32,

@@ -5,10 +5,10 @@ use crate::{
     },
     raw_tensor::RawTensor,
     shape::Shape,
-    DataType, Device, Param, Tensor,
+    DataType, Device, Param, ParamId, Tensor,
 };
-use serde::{Deserialize, Serialize};
-use std::{array, fs, path::Path};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use std::{array, collections::BTreeMap, fs, path::Path};
 
 pub mod record;
 
@@ -216,11 +216,13 @@ impl<const D: usize> Module for Param<D> {
     }
 
     fn record(&self, recorder: &mut impl Recorder) -> Result<(), RecordError> {
+        recorder.record_config("id", &self.id())?;
         self.value().record(recorder)
     }
 
     fn load_config(loader: &mut impl ConfigLoader, device: Device) -> Result<Self, RecordError> {
-        Tensor::<D>::load_config(loader, device).map(Self::new)
+        let id = loader.load_config::<ParamId>("id")?;
+        Tensor::<D>::load_config(loader, device).map(|tensor| Self::new_with_id(tensor, id))
     }
 
     fn load_tensors(&mut self, loader: &mut impl TensorLoader) -> Result<(), RecordError> {
@@ -264,7 +266,7 @@ impl Module for RawTensor {
             "meta",
             &TensorConfig {
                 data_type: self.data_type(),
-                shape: self.shape().into(),
+                shape: self.shape(),
             },
         )?;
         recorder.record_raw_tensor("value", self)?;
@@ -304,5 +306,49 @@ where
 
     fn load_tensors(&mut self, loader: &mut impl TensorLoader) -> Result<(), RecordError> {
         (**self).load_tensors(loader)
+    }
+}
+
+impl<K, V> Module for BTreeMap<K, V>
+where
+    K: Ord + Serialize + DeserializeOwned + Send + Sync,
+    V: Module + Send + Sync,
+{
+    fn visit_params(&self, visitor: &mut impl ParamVisitor) {
+        for module in self.values() {
+            module.visit_params(visitor);
+        }
+    }
+
+    fn visit_params_mut(&mut self, visitor: &mut impl ParamMutVisitor) {
+        for module in self.values_mut() {
+            module.visit_params_mut(visitor);
+        }
+    }
+
+    fn record(&self, recorder: &mut impl Recorder) -> Result<(), RecordError> {
+        let in_order: Vec<(&K, &V)> = self.iter().collect();
+        recorder.record_config("keys", &in_order.iter().map(|(k, _)| k).collect::<Vec<_>>())?;
+        for (i, (_, module)) in in_order.iter().enumerate() {
+            recorder.record_submodule(&i.to_string(), *module)?;
+        }
+        Ok(())
+    }
+
+    fn load_config(loader: &mut impl ConfigLoader, device: Device) -> Result<Self, RecordError> {
+        let keys: Vec<K> = loader.load_config("keys")?;
+        let mut map = BTreeMap::new();
+        for (i, key) in keys.into_iter().enumerate() {
+            let module: V = loader.load_submodule(&i.to_string(), device)?;
+            map.insert(key, module);
+        }
+        Ok(map)
+    }
+
+    fn load_tensors(&mut self, loader: &mut impl TensorLoader) -> Result<(), RecordError> {
+        for (i, module) in self.values_mut().enumerate() {
+            loader.load_submodule(&i.to_string(), module)?;
+        }
+        Ok(())
     }
 }
