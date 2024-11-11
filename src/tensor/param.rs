@@ -25,6 +25,10 @@ impl<const D: usize> Param<D> {
         &self.value
     }
 
+    pub(crate) fn value_mut(&mut self) -> &mut Tensor<D> {
+        &mut self.value
+    }
+
     pub fn into_value(self) -> Tensor<D> {
         self.value
     }

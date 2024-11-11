@@ -1,7 +1,7 @@
 use helium::{
     initializer::Initializer,
     modules::linear::{Linear, LinearSettings},
-    optimizer::{sgd::Sgd, Adam, AdamSettings, Optimizer},
+    optimizer::{Adam, AdamSettings, Optimizer},
     Device, Tensor,
 };
 use helium_macros::Module;

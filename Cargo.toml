@@ -9,7 +9,7 @@ edition = "2021"
 [dependencies]
 helium-macros = { path = "macros" }
 ahash = "0.8"
-bumpalo = { version = "3", optional = true }
+bumpalo = "3"
 bytemuck = { version = "1", features = ["derive", "extern_crate_alloc", "min_const_generics", "nightly_stdsimd", "nightly_portable_simd"] }
 half = { version = "2", features = ["use-intrinsics", "bytemuck"] }
 slotmap = "1"
@@ -30,6 +30,7 @@ profiling = "1"
 flume = "0.11"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+safetensors = "0.4"
 
 [dependencies.cudarc]
 #version = "0.12"
@@ -59,7 +60,7 @@ mnist = { version = "0.6", features = ["download"] }
 
 [features]
 default = ["cpu", "cuda"]
-cuda = ["dep:cudarc", "dep:thread_local", "dep:bumpalo", "dep:indoc"]
+cuda = ["dep:cudarc", "dep:thread_local", "dep:indoc"]
 cuda-tracing = []
 cuda-debug = []
 cpu = ["dep:gemm", "dep:sleef", "dep:rayon"]

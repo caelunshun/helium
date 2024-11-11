@@ -41,6 +41,14 @@ impl<const D: usize, C: DataClassTrait> Tensor<D, C> {
         self.raw
     }
 
+    pub(crate) fn as_raw(&self) -> &RawTensor {
+        &self.raw
+    }
+
+    pub(crate) fn as_raw_mut(&mut self) -> &mut RawTensor {
+        &mut self.raw
+    }
+
     pub fn is_virtual(&self) -> bool {
         self.raw.is_virtual()
     }

@@ -247,7 +247,7 @@ pub enum DataSlice<'a> {
     F16(&'a [f16]),
     U32(&'a [u32]),
     /// Packed as bitset
-    Bool(&'a [bool]),
+    Bool(&'a [u32]),
 }
 
 impl<'a> DataSlice<'a> {
@@ -259,6 +259,16 @@ impl<'a> DataSlice<'a> {
             DataSlice::U32(v) => bytemuck::cast_slice(v),
             DataSlice::Bool(v) => bytemuck::cast_slice(v),
         }
+    }
+
+    pub fn from_bytes(dtype: DataType, bytes: &'a [u8]) -> Result<Self, bytemuck::PodCastError> {
+        Ok(match dtype {
+            DataType::F16 => DataSlice::F16(bytemuck::try_cast_slice(bytes)?),
+            DataType::Bf16 => DataSlice::Bf16(bytemuck::try_cast_slice(bytes)?),
+            DataType::F32 => DataSlice::F32(bytemuck::try_cast_slice(bytes)?),
+            DataType::U32 => DataSlice::U32(bytemuck::try_cast_slice(bytes)?),
+            DataType::Bool => DataSlice::Bool(bytemuck::try_cast_slice(bytes)?),
+        })
     }
 
     pub fn len(&self) -> usize {
@@ -287,7 +297,7 @@ impl<'a> DataSlice<'a> {
             DataSlice::Bf16(v) => Scalar::Bf16(v[i]),
             DataSlice::F16(v) => Scalar::F16(v[i]),
             DataSlice::U32(v) => Scalar::U32(v[i]),
-            DataSlice::Bool(v) => Scalar::Bool(v[i]),
+            DataSlice::Bool(v) => Scalar::Bool((v[i / 32] >> (i % 32)) == 1),
         }
     }
 }
@@ -365,6 +375,12 @@ impl AsDataSlice for Vec<f16> {
 impl AsDataSlice for Vec<u32> {
     fn as_data_slice(&self) -> DataSlice {
         DataSlice::U32(self.as_slice())
+    }
+}
+
+impl AsDataSlice for DataSlice<'_> {
+    fn as_data_slice(&self) -> DataSlice {
+        *self
     }
 }
 

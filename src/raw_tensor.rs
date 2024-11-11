@@ -456,12 +456,10 @@ impl RawTensor {
         self.op_unary_pointwise(UnaryPointwiseOp::Sigmoid)
     }
 
-    #[expect(unused)]
     pub fn min(self, other: Self) -> Self {
         self.op_binary_pointwise(&other, BinaryPointwiseOp::Min)
     }
 
-    #[expect(unused)]
     pub fn max(self, other: Self) -> Self {
         self.op_binary_pointwise(&other, BinaryPointwiseOp::Max)
     }
@@ -512,7 +510,6 @@ impl RawTensor {
         self.compare_op(rhs, CompareOp::Equal)
     }
 
-    #[expect(unused)]
     pub fn compare_not_equal(self, rhs: Self) -> Self {
         self.compare_op(rhs, CompareOp::NotEqual)
     }
@@ -521,17 +518,14 @@ impl RawTensor {
         self.compare_op(rhs, CompareOp::LessThan)
     }
 
-    #[expect(unused)]
     pub fn compare_less_than_or_equal(self, rhs: Self) -> Self {
         self.compare_op(rhs, CompareOp::LessThanOrEqual)
     }
 
-    #[expect(unused)]
     pub fn compare_greater_than(self, rhs: Self) -> Self {
         self.compare_op(rhs, CompareOp::GreaterThan)
     }
 
-    #[expect(unused)]
     pub fn compare_greater_than_or_equal(self, rhs: Self) -> Self {
         self.compare_op(rhs, CompareOp::GreaterThanOrEqual)
     }

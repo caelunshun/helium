@@ -1,10 +1,14 @@
 use crate::{
-    module::record::{ConfigLoader, ParamLoader, RecordError, Recorder},
+    module::record::{
+        safetensors::{SafetensorsLoader, SafetensorsRecorder},
+        ConfigLoader, RecordError, Recorder, TensorLoader,
+    },
+    raw_tensor::RawTensor,
     shape::Shape,
     DataType, Device, Param, Tensor,
 };
 use serde::{Deserialize, Serialize};
-use std::array;
+use std::{array, fs, path::Path};
 
 pub mod record;
 
@@ -21,7 +25,21 @@ pub trait Module: Sized + Send + Sync {
     /// to an initial value (e.g. zero).
     fn load_config(loader: &mut impl ConfigLoader, device: Device) -> Result<Self, RecordError>;
     /// Loads the module parameters.
-    fn load_params(&mut self, loader: &mut impl ParamLoader) -> Result<(), RecordError>;
+    fn load_tensors(&mut self, loader: &mut impl TensorLoader) -> Result<(), RecordError>;
+
+    fn save_to_savetensors(&self, path: impl AsRef<Path>) -> Result<(), RecordError> {
+        let mut recorder = SafetensorsRecorder::new();
+        self.record(&mut recorder)?;
+        recorder.save_to_file(path)
+    }
+
+    fn load_from_safetensors(path: impl AsRef<Path>, device: Device) -> Result<Self, RecordError> {
+        let bytes = fs::read(path)?;
+        let mut loader = SafetensorsLoader::new(&bytes)?;
+        let mut module = Self::load_config(&mut loader, device)?;
+        module.load_tensors(&mut loader)?;
+        Ok(module)
+    }
 
     /// Starts evaluating the parameter values on the device.
     fn async_start_eval(&self) {
@@ -75,7 +93,7 @@ impl<T: Module> Module for Option<T> {
         }
     }
 
-    fn load_params(&mut self, loader: &mut impl ParamLoader) -> Result<(), RecordError> {
+    fn load_tensors(&mut self, loader: &mut impl TensorLoader) -> Result<(), RecordError> {
         if let Some(module) = self {
             loader.load_submodule("value", module)?;
         }
@@ -113,7 +131,7 @@ impl<T: Module> Module for Vec<T> {
         Ok(modules)
     }
 
-    fn load_params(&mut self, loader: &mut impl ParamLoader) -> Result<(), RecordError> {
+    fn load_tensors(&mut self, loader: &mut impl TensorLoader) -> Result<(), RecordError> {
         for (i, module) in self.iter_mut().enumerate() {
             loader.load_submodule(&i.to_string(), module)?;
         }
@@ -149,7 +167,7 @@ impl<const N: usize, T: Module> Module for [T; N] {
         Ok(modules.map(|opt| opt.unwrap()))
     }
 
-    fn load_params(&mut self, loader: &mut impl ParamLoader) -> Result<(), RecordError> {
+    fn load_tensors(&mut self, loader: &mut impl TensorLoader) -> Result<(), RecordError> {
         for (i, module) in self.iter_mut().enumerate() {
             loader.load_submodule(&i.to_string(), module)?;
         }
@@ -176,14 +194,14 @@ impl Module for () {
         Ok(())
     }
 
-    fn load_params(&mut self, loader: &mut impl ParamLoader) -> Result<(), RecordError> {
+    fn load_tensors(&mut self, loader: &mut impl TensorLoader) -> Result<(), RecordError> {
         let _ = loader;
         Ok(())
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ParamMetadata {
+struct TensorConfig {
     shape: Shape,
     data_type: DataType,
 }
@@ -198,37 +216,45 @@ impl<const D: usize> Module for Param<D> {
     }
 
     fn record(&self, recorder: &mut impl Recorder) -> Result<(), RecordError> {
-        recorder.record_config(
-            "meta",
-            &ParamMetadata {
-                data_type: self.value().data_type(),
-                shape: self.value().shape().into(),
-            },
-        )?;
-        recorder.record_param("value", self.value())?;
-        Ok(())
+        self.value().record(recorder)
     }
 
     fn load_config(loader: &mut impl ConfigLoader, device: Device) -> Result<Self, RecordError> {
-        let meta: ParamMetadata = loader.load_config("meta")?;
-        Ok(Self::new(Tensor::<D>::zeros(
-            meta.shape
-                .dims()
-                .try_into()
-                .map_err(|_| RecordError::Other("shape mismatch".to_owned()))?,
-            meta.data_type,
-            device,
-        )))
+        Tensor::<D>::load_config(loader, device).map(Self::new)
     }
 
-    fn load_params(&mut self, loader: &mut impl ParamLoader) -> Result<(), RecordError> {
-        let device = self.value().device();
-        self.set_value(loader.load_param("value", device)?);
-        Ok(())
+    fn load_tensors(&mut self, loader: &mut impl TensorLoader) -> Result<(), RecordError> {
+        self.value_mut().load_tensors(loader)
     }
 }
 
 impl<const D: usize> Module for Tensor<D> {
+    fn visit_params(&self, visitor: &mut impl ParamVisitor) {
+        self.as_raw().visit_params(visitor)
+    }
+
+    fn visit_params_mut(&mut self, visitor: &mut impl ParamMutVisitor) {
+        self.as_raw_mut().visit_params_mut(visitor)
+    }
+
+    fn record(&self, recorder: &mut impl Recorder) -> Result<(), RecordError> {
+        self.as_raw().record(recorder)
+    }
+
+    fn load_config(loader: &mut impl ConfigLoader, device: Device) -> Result<Self, RecordError> {
+        let raw = RawTensor::load_config(loader, device)?;
+        if raw.shape().num_dims() != D {
+            return Err(RecordError::Other("shape mismatch".to_owned()));
+        }
+        Ok(Tensor::from_raw(raw))
+    }
+
+    fn load_tensors(&mut self, loader: &mut impl TensorLoader) -> Result<(), RecordError> {
+        self.as_raw_mut().load_tensors(loader)
+    }
+}
+
+impl Module for RawTensor {
     fn visit_params(&self, _visitor: &mut impl ParamVisitor) {}
 
     fn visit_params_mut(&mut self, _visitor: &mut impl ParamMutVisitor) {}
@@ -236,29 +262,47 @@ impl<const D: usize> Module for Tensor<D> {
     fn record(&self, recorder: &mut impl Recorder) -> Result<(), RecordError> {
         recorder.record_config(
             "meta",
-            &ParamMetadata {
+            &TensorConfig {
                 data_type: self.data_type(),
                 shape: self.shape().into(),
             },
         )?;
-        recorder.record_param("value", self)?;
+        recorder.record_raw_tensor("value", self)?;
         Ok(())
     }
 
     fn load_config(loader: &mut impl ConfigLoader, device: Device) -> Result<Self, RecordError> {
-        let meta: ParamMetadata = loader.load_config("meta")?;
-        Ok(Tensor::<D>::zeros(
-            meta.shape
-                .dims()
-                .try_into()
-                .map_err(|_| RecordError::Other("shape mismatch".to_owned()))?,
-            meta.data_type,
-            device,
-        ))
+        let meta: TensorConfig = loader.load_config("meta")?;
+        Ok(RawTensor::from_constant(0.0f32, meta.shape.clone(), device))
     }
 
-    fn load_params(&mut self, loader: &mut impl ParamLoader) -> Result<(), RecordError> {
-        *self = loader.load_param("value", self.device())?;
+    fn load_tensors(&mut self, loader: &mut impl TensorLoader) -> Result<(), RecordError> {
+        *self = loader.load_raw_tensor("value", self.device())?;
         Ok(())
+    }
+}
+
+impl<T> Module for Box<T>
+where
+    T: Module,
+{
+    fn visit_params(&self, visitor: &mut impl ParamVisitor) {
+        (**self).visit_params(visitor)
+    }
+
+    fn visit_params_mut(&mut self, visitor: &mut impl ParamMutVisitor) {
+        (**self).visit_params_mut(visitor)
+    }
+
+    fn record(&self, recorder: &mut impl Recorder) -> Result<(), RecordError> {
+        (**self).record(recorder)
+    }
+
+    fn load_config(loader: &mut impl ConfigLoader, device: Device) -> Result<Self, RecordError> {
+        T::load_config(loader, device).map(Box::new)
+    }
+
+    fn load_tensors(&mut self, loader: &mut impl TensorLoader) -> Result<(), RecordError> {
+        (**self).load_tensors(loader)
     }
 }

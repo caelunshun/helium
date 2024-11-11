@@ -92,7 +92,7 @@ pub fn derive_module(input: DeriveInput) -> Result<TokenStream, Error> {
             }
 
             #[allow(unused_variables)]
-            fn load_params(&mut self, loader: &mut impl ::helium::module::record::ParamLoader) -> Result<(), ::helium::module::record::RecordError> {
+            fn load_tensors(&mut self, loader: &mut impl ::helium::module::record::TensorLoader) -> Result<(), ::helium::module::record::RecordError> {
                 #impl_load_params
             }
         }
@@ -150,7 +150,7 @@ fn derive_on_fields(fields: &Fields) -> Result<Statements, Error> {
                 let #field_ident = loader.load_submodule(#ident_str, device)?;
             });
             statements.load_params.push(quote! {
-                 <#field_ty as ::helium::module::Module>::load_params(#field_ident, loader)?;
+                 <#field_ty as ::helium::module::Module>::load_tensors(#field_ident, loader)?;
             });
         }
     }

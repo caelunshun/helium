@@ -1,14 +1,21 @@
-use crate::{module::Module, Device, Tensor};
+use crate::{module::Module, raw_tensor::RawTensor, Device, Tensor};
+use ::safetensors::SafeTensorError;
 use serde::{de::DeserializeOwned, Serialize};
 use std::io;
 
+pub mod safetensors;
+
 /// Implements serialization for modules.
 pub trait Recorder {
-    fn record_param<const D: usize>(
+    fn record_tensor<const D: usize>(
         &mut self,
         name: &str,
         param: &Tensor<D>,
-    ) -> Result<(), RecordError>;
+    ) -> Result<(), RecordError> {
+        self.record_raw_tensor(name, &param.clone().into_raw())
+    }
+
+    fn record_raw_tensor(&mut self, name: &str, tensor: &RawTensor) -> Result<(), RecordError>;
 
     fn record_config(&mut self, key: &str, value: &impl Serialize) -> Result<(), RecordError>;
 
@@ -22,12 +29,23 @@ pub trait ConfigLoader {
     fn load_submodule<T: Module>(&mut self, name: &str, device: Device) -> Result<T, RecordError>;
 }
 
-pub trait ParamLoader {
-    fn load_param<const D: usize>(
+pub trait TensorLoader {
+    fn load_tensor<const D: usize>(
         &mut self,
         name: &str,
         device: Device,
-    ) -> Result<Tensor<D>, RecordError>;
+    ) -> Result<Tensor<D>, RecordError> {
+        let raw = self.load_raw_tensor(name, device)?;
+        if raw.shape().num_dims() != D {
+            return Err(RecordError::Other(format!(
+                "expected {D} dimensions, but record contained {}",
+                raw.shape().num_dims()
+            )));
+        }
+        Ok(Tensor::from_raw(raw))
+    }
+
+    fn load_raw_tensor(&mut self, name: &str, device: Device) -> Result<RawTensor, RecordError>;
 
     fn load_submodule(&mut self, name: &str, module: &mut impl Module) -> Result<(), RecordError>;
 }
@@ -40,6 +58,8 @@ pub enum RecordError {
     MissingField(String),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Safetensors(#[from] SafeTensorError),
     #[error("{0}")]
     Other(String),
 }
