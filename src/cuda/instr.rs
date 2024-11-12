@@ -41,11 +41,12 @@ impl Instr {
         }
     }
 
+    #[profiling::function]
     pub fn precompile(&self, cx: &CudaContext) {
         match self {
             Instr::CudnnGraph(instr) => instr.precompile(cx),
             Instr::PointwiseGraph(instr) => instr.precompile(cx),
-            Instr::PermuteDims(_) => {}
+            Instr::PermuteDims(instr) => instr.precompile(cx),
         }
     }
 }

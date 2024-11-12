@@ -52,6 +52,11 @@ impl PermuteDims {
             .expect("failed to execute kernel");
     }
 
+    #[profiling::function]
+    pub fn precompile(&self, cx: &CudaContext) {
+        self.get_cached_kernel(cx);
+    }
+
     fn get_cached_kernel(&self, cx: &CudaContext) -> Arc<JitKernel> {
         static CACHE: Cache<OpSubgraph, Arc<JitKernel>> = Cache::with_capacity(1024);
         CACHE.get_or_insert(&self.subgraph, || Arc::new(self.build_kernel(cx)))

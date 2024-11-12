@@ -36,6 +36,7 @@ impl PointwiseGraph {
         Self { subgraph }
     }
 
+    #[profiling::function]
     pub fn precompile(&self, cx: &CudaContext) {
         self.get_kernel(cx);
     }

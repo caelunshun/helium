@@ -760,6 +760,7 @@ impl OperationGraphBuilder {
         self
     }
 
+    #[profiling::function]
     pub fn build(self, cx: &CudnnContext) -> Result<OperationGraph, CudaError> {
         let mut desc = RawDescriptor::new(CUDNN_BACKEND_OPERATIONGRAPH_DESCRIPTOR)?;
         desc.set_attribute(CUDNN_ATTR_OPERATIONGRAPH_HANDLE, cx.0.handle)?;
@@ -783,6 +784,7 @@ pub struct Engine {
 }
 
 impl Engine {
+    #[profiling::function]
     pub fn choose_with_heuristic(graph: &OperationGraph) -> Result<Self, CudaError> {
         let mut heuristic = RawDescriptor::new(CUDNN_BACKEND_ENGINEHEUR_DESCRIPTOR)?;
         heuristic.set_attribute(CUDNN_ATTR_ENGINEHEUR_OPERATION_GRAPH, graph.raw.desc)?;
@@ -840,6 +842,7 @@ impl Engine {
             .unwrap())
     }
 
+    #[profiling::function]
     pub unsafe fn execute(
         &self,
         varpack: &VariantPack,
