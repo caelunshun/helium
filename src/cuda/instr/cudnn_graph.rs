@@ -282,6 +282,9 @@ impl CudnnGraph {
             BinaryPointwiseOp::Pow => PointwiseMode::Pow,
             BinaryPointwiseOp::Min => PointwiseMode::Min,
             BinaryPointwiseOp::Max => PointwiseMode::Max,
+            BinaryPointwiseOp::Or | BinaryPointwiseOp::And | BinaryPointwiseOp::Xor => {
+                unimplemented!()
+            }
         }
     }
 

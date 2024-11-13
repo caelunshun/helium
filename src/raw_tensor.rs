@@ -20,7 +20,7 @@ use slotmap::{Key, SecondaryMap};
 use std::{
     fmt::Debug,
     future::Future,
-    ops::{Add, Div, Mul, Neg, Sub},
+    ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Neg, Sub},
     pin::Pin,
     sync::{Arc, Weak},
     task::{Context, Poll, Waker},
@@ -683,6 +683,33 @@ impl Div<f32> for RawTensor {
     #[allow(clippy::suspicious_arithmetic_impl)]
     fn div(self, rhs: f32) -> Self::Output {
         self * rhs.recip()
+    }
+}
+
+impl BitAnd for RawTensor {
+    type Output = Self;
+
+    fn bitand(self, rhs: Self) -> Self::Output {
+        assert_eq!(self.data_type(), DataType::Bool);
+        self.op_binary_pointwise(&rhs, BinaryPointwiseOp::And)
+    }
+}
+
+impl BitOr for RawTensor {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        assert_eq!(self.data_type(), DataType::Bool);
+        self.op_binary_pointwise(&rhs, BinaryPointwiseOp::Or)
+    }
+}
+
+impl BitXor for RawTensor {
+    type Output = Self;
+
+    fn bitxor(self, rhs: Self) -> Self::Output {
+        assert_eq!(self.data_type(), DataType::Bool);
+        self.op_binary_pointwise(&rhs, BinaryPointwiseOp::Xor)
     }
 }
 

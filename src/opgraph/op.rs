@@ -308,6 +308,11 @@ pub enum BinaryPointwiseOp {
     Pow,
     Min,
     Max,
+
+    // Boolean operators (only valid for bool datatype, for now)
+    And,
+    Or,
+    Xor,
 }
 
 /// Cast tensor to a new precision.

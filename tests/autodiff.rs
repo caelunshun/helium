@@ -153,3 +153,69 @@ fn relu() {
 
     assert_ulps_eq!(grad.to_vec::<f32>().as_slice(), &[1.0, 0.0, 5.0, -10.0][..]);
 }
+
+#[test]
+fn max_a_gt_b() {
+    let a = Param::new(Tensor::from_constant(1.5f32, [1], DEVICE));
+    let b = Param::new(Tensor::from_constant(0.5f32, [1], DEVICE));
+    let result = a.value().max(&b) * 2.0;
+    let grads = result.backward();
+
+    assert_eq!(grads.get(a.id()).to_scalar::<f32>(), 2.0);
+    assert_eq!(grads.get(b.id()).to_scalar::<f32>(), 0.0);
+}
+
+#[test]
+fn max_b_gt_a() {
+    let a = Param::new(Tensor::from_constant(-0.5f32, [1], DEVICE));
+    let b = Param::new(Tensor::from_constant(2.5f32, [1], DEVICE));
+    let result = a.value().max(&b) * 2.0;
+    let grads = result.backward();
+
+    assert_eq!(grads.get(a.id()).to_scalar::<f32>(), 0.0);
+    assert_eq!(grads.get(b.id()).to_scalar::<f32>(), 2.0);
+}
+
+#[test]
+fn max_ab_equal() {
+    let a = Param::new(Tensor::from_constant(-0.5f32, [1], DEVICE));
+    let b = Param::new(Tensor::from_constant(-0.5f32, [1], DEVICE));
+    let result = a.value().max(&b) * 2.0;
+    let grads = result.backward();
+
+    assert_eq!(grads.get(a.id()).to_scalar::<f32>(), 2.0 * 0.5);
+    assert_eq!(grads.get(b.id()).to_scalar::<f32>(), 2.0 * 0.5);
+}
+
+#[test]
+fn min_a_lt_b() {
+    let a = Param::new(Tensor::from_constant(-1.5f32, [1], DEVICE));
+    let b = Param::new(Tensor::from_constant(0.5f32, [1], DEVICE));
+    let result = a.value().min(&b) * 2.0;
+    let grads = result.backward();
+
+    assert_eq!(grads.get(a.id()).to_scalar::<f32>(), 2.0);
+    assert_eq!(grads.get(b.id()).to_scalar::<f32>(), 0.0);
+}
+
+#[test]
+fn min_b_lt_a() {
+    let a = Param::new(Tensor::from_constant(0.5f32, [1], DEVICE));
+    let b = Param::new(Tensor::from_constant(-2.5f32, [1], DEVICE));
+    let result = a.value().min(&b) * 2.0;
+    let grads = result.backward();
+
+    assert_eq!(grads.get(a.id()).to_scalar::<f32>(), 0.0);
+    assert_eq!(grads.get(b.id()).to_scalar::<f32>(), 2.0);
+}
+
+#[test]
+fn min_ab_equal() {
+    let a = Param::new(Tensor::from_constant(-0.5f32, [1], DEVICE));
+    let b = Param::new(Tensor::from_constant(-0.5f32, [1], DEVICE));
+    let result = a.value().min(&b) * 2.0;
+    let grads = result.backward();
+
+    assert_eq!(grads.get(a.id()).to_scalar::<f32>(), 2.0 * 0.5);
+    assert_eq!(grads.get(b.id()).to_scalar::<f32>(), 2.0 * 0.5);
+}

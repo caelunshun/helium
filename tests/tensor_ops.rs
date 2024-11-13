@@ -470,3 +470,21 @@ fn constant() {
     assert_eq!(y.data_type(), DataType::Bf16);
     assert_eq!(y.to_vec::<bf16>(), vec![bf16::from_f32(200.0); 6]);
 }
+
+#[test]
+fn max() {
+    let a = Tensor::from_constant(-1.0f32, [3], DEVICE);
+    let b = Tensor::from_slice(&[-3.0, -1.0, 2.0][..], [3], DEVICE);
+
+    let result = a.max(b).to_vec::<f32>();
+    assert_eq!(result, &[-1.0, -1.0, 2.0]);
+}
+
+#[test]
+fn min() {
+    let a = Tensor::from_constant(-1.0f32, [3], DEVICE);
+    let b = Tensor::from_slice(&[-3.0, -1.0, 2.0][..], [3], DEVICE);
+
+    let result = a.min(b).to_vec::<f32>();
+    assert_eq!(result, &[-3.0, -1.0, -1.0]);
+}

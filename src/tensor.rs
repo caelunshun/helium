@@ -386,6 +386,54 @@ impl<const D: usize> Tensor<D, Float> {
         )
     }
 
+    pub fn max(&self, other: impl AsTensor<D>) -> Self {
+        let compute_greater_mask =
+            |a: &RawTensor, b: &RawTensor| a.clone().compare_greater_than(b.clone());
+        let compute_equal_mask = |a: &RawTensor, b: &RawTensor| a.clone().compare_equal(b.clone());
+
+        let compute_gradient = move |data: RawTensor, other: RawTensor| {
+            let ones = RawTensor::from_constant(1.0f32, data.shape(), data.device());
+            let zeros = RawTensor::from_constant(0.0f32, data.shape(), data.device());
+            let halves = RawTensor::from_constant(0.5f32, data.shape(), data.device());
+
+            let greater_mask = compute_greater_mask(&data, &other);
+            let equal_mask = compute_equal_mask(&data, &other);
+
+            greater_mask.select(ones, equal_mask.select(halves, zeros))
+        };
+
+        self.op_binary(
+            other.as_tensor(),
+            |a, b| a.max(b),
+            move |a, b, flow| compute_gradient(a, b) * flow,
+            move |a, b, flow| compute_gradient(b, a) * flow,
+        )
+    }
+
+    pub fn min(&self, other: impl AsTensor<D>) -> Self {
+        let compute_less_mask =
+            |a: &RawTensor, b: &RawTensor| a.clone().compare_less_than(b.clone());
+        let compute_equal_mask = |a: &RawTensor, b: &RawTensor| a.clone().compare_equal(b.clone());
+
+        let compute_gradient = move |data: RawTensor, other: RawTensor| {
+            let ones = RawTensor::from_constant(1.0f32, data.shape(), data.device());
+            let zeros = RawTensor::from_constant(0.0f32, data.shape(), data.device());
+            let halves = RawTensor::from_constant(0.5f32, data.shape(), data.device());
+
+            let less_mask = compute_less_mask(&data, &other);
+            let equal_mask = compute_equal_mask(&data, &other);
+
+            less_mask.select(ones, equal_mask.select(halves, zeros))
+        };
+
+        self.op_binary(
+            other.as_tensor(),
+            |a, b| a.min(b),
+            move |a, b, flow| compute_gradient(a, b) * flow,
+            move |a, b, flow| compute_gradient(b, a) * flow,
+        )
+    }
+
     /// Row-major matrix multiplication: `self * rhs`.
     /// Optionally batched.
     pub fn matmul(&self, rhs: impl AsTensor<D>) -> Self {

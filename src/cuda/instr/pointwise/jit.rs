@@ -554,6 +554,9 @@ fn binary_pointwise_op(lhs: &str, rhs: &str, op: BinaryPointwiseOp, class: DataC
         BinaryPointwiseOp::Min => format!("min({lhs}, {rhs})"),
         BinaryPointwiseOp::Max if class == DataClass::Float => format!("fmaxf({lhs}, {rhs})"),
         BinaryPointwiseOp::Max => format!("max({lhs}, {rhs})"),
+        BinaryPointwiseOp::And => format!("{lhs} & {rhs}"),
+        BinaryPointwiseOp::Or => format!("{lhs} | {rhs}"),
+        BinaryPointwiseOp::Xor => format!("{lhs} ^ {rhs}"),
     }
 }
 
