@@ -117,8 +117,8 @@ impl Backend for Cuda {
         let streams = cx.stream_pool().expect("failed to get stream pool");
         let op_stream = &streams[0];
 
-        let start = CudaEvent::new().expect("failed to create CUDA event");
-        let stop = CudaEvent::new().expect("failed to create CUDA event");
+        let start = CudaEvent::new(cx).expect("failed to create CUDA event");
+        let stop = CudaEvent::new(cx).expect("failed to create CUDA event");
 
         start
             .record(op_stream)

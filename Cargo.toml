@@ -13,7 +13,7 @@ bumpalo = "3"
 bytemuck = { version = "1", features = ["derive", "extern_crate_alloc", "min_const_generics", "nightly_stdsimd", "nightly_portable_simd"] }
 half = { version = "2", features = ["use-intrinsics", "bytemuck"] }
 slotmap = "1"
-gemm = { version = "0.18", optional = true, features = ["nightly"] }
+gemm = { version = "0.18", optional = true }
 sleef = { version = "0.3", optional = true }
 rayon = { version = "1", optional = true }
 parking_lot = "0.12"
@@ -34,12 +34,13 @@ safetensors = "0.4"
 
 [dependencies.cudarc]
 git = "https://github.com/caelunshun/cudarc"
-branch = "program-file-name"
+branch = "fix-nvrtc-use-after-free"
 optional = true
 default-features = false
 features = [
     "std",
-    "cuda-version-from-build-system",
+    "dynamic-linking",
+    "cuda-12080",
     "driver",
     "cublas",
     "cublaslt",

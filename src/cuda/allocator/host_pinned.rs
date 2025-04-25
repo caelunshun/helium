@@ -1,8 +1,9 @@
 use crate::cuda::{
     allocator::block::{Block, BlockAllocator, PageId},
+    context::CudaContext,
     error::CudaError,
 };
-use cudarc::{driver, driver::sys::CU_MEMHOSTALLOC_PORTABLE};
+use cudarc::driver::sys::{cuCtxSetCurrent, cuMemHostAlloc, CUcontext, CU_MEMHOSTALLOC_DEVICEMAP};
 use parking_lot::{Mutex, MutexGuard};
 use slotmap::SecondaryMap;
 use std::{
@@ -19,10 +20,14 @@ use std::{
 /// Underlying memory is allocated with cudaHostAlloc(),
 /// but we cache these allocations to improve performance.
 pub struct HostPinnedAllocator {
+    cx: CUcontext,
     block_allocator: BlockAllocator,
     pages: SecondaryMap<PageId, Page>,
     dropped_memories: Arc<Mutex<Vec<Block>>>,
 }
+
+unsafe impl Send for HostPinnedAllocator {}
+unsafe impl Sync for HostPinnedAllocator {}
 
 impl HostPinnedAllocator {
     pub const MAX_ALIGN: usize = 256;
@@ -32,14 +37,15 @@ impl HostPinnedAllocator {
     pub fn global() -> MutexGuard<'static, Self> {
         static GLOBAL_ALLOCATOR: OnceLock<Mutex<HostPinnedAllocator>> = OnceLock::new();
         GLOBAL_ALLOCATOR
-            .get_or_init(|| Mutex::new(Self::new()))
+            .get_or_init(|| Mutex::new(Self::new(CudaContext::global(0).unwrap().raw_context())))
             .lock()
     }
 
     /// # Safety
-    /// `context` must outlive `self`.
-    pub fn new() -> Self {
+    /// `cx` must outlive `self`.
+    pub fn new(cx: CUcontext) -> Self {
         Self {
+            cx,
             block_allocator: BlockAllocator::new(),
             pages: SecondaryMap::default(),
             dropped_memories: Arc::new(Mutex::new(Vec::new())),
@@ -83,14 +89,18 @@ impl HostPinnedAllocator {
     }
 
     fn new_page_for_at_least(&mut self, min_size: usize) -> Result<(), CudaError> {
+        unsafe {
+            cuCtxSetCurrent(self.cx).result()?;
+        }
+
         let size = Self::MIN_PAGE_SIZE.max(min_size).next_power_of_two();
 
         let mut ptr = ptr::null_mut();
 
         unsafe {
-            driver::sys::lib()
-                .cuMemHostAlloc(&mut ptr, size, CU_MEMHOSTALLOC_PORTABLE)
-                .result()?
+            cuMemHostAlloc(&mut ptr, size, CU_MEMHOSTALLOC_DEVICEMAP)
+                .result()
+                .unwrap()
         };
 
         let page_id = self.block_allocator.add_page(size as u64);

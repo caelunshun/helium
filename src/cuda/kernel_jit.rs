@@ -9,15 +9,12 @@ use crate::{
     DataType,
 };
 use bumpalo::Bump;
-use cudarc::{
-    driver::{LaunchAsync, LaunchConfig},
-    nvrtc,
-    nvrtc::Ptx,
-};
+use cudarc::{driver::sys::cuLaunchKernel, nvrtc, nvrtc::Ptx};
 use indoc::formatdoc;
 use std::{
     cell::Cell,
     ffi::c_void,
+    ptr,
     sync::{atomic::AtomicU64, Arc},
 };
 
@@ -163,15 +160,19 @@ impl KernelBuilder {
                     prec_sqrt: None,
                     prec_div: None,
                     fmad: None,
-                    options: vec!["--device-debug".to_owned(), "--dopt=on".to_owned()],
-                    //options: vec![],
+                    options: vec!["-dopt=on".into(), "-lineinfo".into()],
                     use_fast_math: None,
                     maxrregcount: None,
                     include_paths: vec!["/usr/local/cuda/include".to_owned()], // TODO Linux only
                     arch: Some(arch),
                 },
             )
-            .expect("failed to compile kernel to PTX");
+            .unwrap_or_else(|e| {
+                panic!(
+                    "failed to compile kernel to PTX ({e}). source code: {}",
+                    key.source
+                )
+            });
             Arc::new(ptx)
         }))
     }
@@ -184,7 +185,6 @@ impl KernelBuilder {
     ) -> Result<JitKernel, CudaError> {
         let ptx = self.build_ptx(kernel_name, target_device)?;
         Ok(JitKernel {
-            module_name: JitKernel::make_module_name(kernel_name, &ptx),
             ptx,
             params: self.params.clone(),
             kernel_name: kernel_name.to_owned(),
@@ -220,19 +220,9 @@ pub struct JitKernel {
     ptx: Arc<Ptx>,
     params: Vec<KernelParam>,
     kernel_name: String,
-    module_name: String,
 }
 
 impl JitKernel {
-    fn make_module_name(kernel_name: &str, ptx: &Arc<Ptx>) -> String {
-        let addr = Arc::as_ptr(ptx) as usize;
-        format!("{kernel_name}_{addr:x}")
-    }
-
-    fn load_on_device(&self, device: &CudaContext) -> Result<(), CudaError> {
-        device.load_kernel_if_needed(&self.ptx, &self.module_name, &self.kernel_name)
-    }
-
     pub fn execute<'a>(
         &self,
         get_tensor_storage: impl Fn(NodeId) -> &'a TensorStorage,
@@ -258,7 +248,8 @@ impl JitKernel {
         grid_size: [u32; 2],
         block_size: [u32; 2],
     ) -> Result<(), CudaError> {
-        self.load_on_device(cx)?;
+        let module = cx.load_module(&self.ptx)?;
+        let function = module.get_function(&self.kernel_name)?;
 
         let bump = Bump::new();
         let mut params = self
@@ -273,18 +264,20 @@ impl JitKernel {
             .collect::<Vec<_>>();
 
         unsafe {
-            cx.device()
-                .get_func(&self.module_name, &self.kernel_name)
-                .expect("loaded on device")
-                .launch_on_stream(
-                    stream.cudarc_stream(),
-                    LaunchConfig {
-                        grid_dim: (grid_size[0], grid_size[1], 1),
-                        block_dim: (block_size[0], block_size[1], 1),
-                        shared_mem_bytes: 0,
-                    },
-                    &mut params,
-                )?;
+            cuLaunchKernel(
+                function,
+                grid_size[0],
+                grid_size[1],
+                1,
+                block_size[0],
+                block_size[1],
+                1,
+                0,
+                stream.raw(),
+                params.as_mut_ptr(),
+                ptr::null_mut(),
+            )
+            .result()?;
         }
 
         Ok(())

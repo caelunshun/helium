@@ -201,14 +201,14 @@ impl Drop for Page {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cudarc::driver::CudaDevice;
+    use crate::cuda::context::CudaContext;
     use rand::{Rng, SeedableRng};
     use rand_pcg::Pcg64Mcg;
 
     #[test]
     fn stress_test() {
-        let device = CudaDevice::new(0).unwrap();
-        let mut allocator = unsafe { DeviceAllocator::new(*device.cu_primary_ctx()) };
+        let cx = CudaContext::global(0).unwrap();
+        let mut allocator = cx.allocator();
 
         let mut rng = Pcg64Mcg::seed_from_u64(66);
 

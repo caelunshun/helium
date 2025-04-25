@@ -453,9 +453,9 @@ fn multiple_iterations() {
         let sample_mean = x.reduce_mean::<2>(1).reshape(mean.shape());
         mean = &mean * 0.9 + &sample_mean * 0.1;
         let y = x.pow_scalar(2.0);
-        dbg!(y.to_vec::<f32>());
+        y.to_vec::<f32>();
     }
-    dbg!(mean.to_vec::<f32>());
+    mean.to_vec::<f32>();
 }
 
 #[test]

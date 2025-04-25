@@ -39,10 +39,7 @@ fn determinism_stress_test() {
                     }
                 });
 
-                for i in 0..100_000 {
-                    if i % 1000 == 0 {
-                        dbg!(i);
-                    }
+                for _i in 0..100_000 {
                     let result = do_ops(a1.value(), &a2, &x);
                     let grad = result.reduce_mean::<1>(1).backward();
                     let grad = grad.get::<2>(a1.id());

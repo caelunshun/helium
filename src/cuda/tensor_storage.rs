@@ -6,7 +6,10 @@ use crate::{
     },
     data_type::{DataSlice, DataType, DataVec},
 };
-use cudarc::{driver, driver::sys::CUdeviceptr};
+use cudarc::{
+    driver,
+    driver::sys::{cuMemsetD16Async, cuMemsetD32Async, cuMemsetD8Async, CUdeviceptr},
+};
 use half::{bf16, f16};
 use std::{
     alloc::Layout,
@@ -68,7 +71,7 @@ impl TensorStorage {
             num_bytes,
             memory: Arc::new(memory),
             data_type,
-            ready_event: Arc::new(CudaEvent::new()?),
+            ready_event: Arc::new(CudaEvent::new(cx)?),
         })
     }
 
@@ -170,41 +173,37 @@ impl TensorStorage {
     pub fn fill(&self, value: f32, stream: &CudaStream) -> Result<(), CudaError> {
         match self.data_type {
             DataType::F16 => unsafe {
-                driver::sys::lib()
-                    .cuMemsetD16Async(
-                        self.device_ptr(),
-                        f16::from_f32(value).to_bits(),
-                        self.num_bytes / mem::size_of::<f32>(),
-                        stream.raw(),
-                    )
-                    .result()?;
+                cuMemsetD16Async(
+                    self.device_ptr(),
+                    f16::from_f32(value).to_bits(),
+                    self.num_bytes / mem::size_of::<f32>(),
+                    stream.raw(),
+                )
+                .result()?;
             },
             DataType::Bf16 => unsafe {
-                driver::sys::lib()
-                    .cuMemsetD16Async(
-                        self.device_ptr(),
-                        bf16::from_f32(value).to_bits(),
-                        self.num_bytes / mem::size_of::<f32>(),
-                        stream.raw(),
-                    )
-                    .result()?;
+                cuMemsetD16Async(
+                    self.device_ptr(),
+                    bf16::from_f32(value).to_bits(),
+                    self.num_bytes / mem::size_of::<f32>(),
+                    stream.raw(),
+                )
+                .result()?;
             },
             DataType::F32 | DataType::U32 => unsafe {
-                driver::sys::lib()
-                    .cuMemsetD32Async(
-                        self.device_ptr(),
-                        value.to_bits(),
-                        self.num_bytes / mem::size_of::<f32>(),
-                        stream.raw(),
-                    )
-                    .result()?;
+                cuMemsetD32Async(
+                    self.device_ptr(),
+                    value.to_bits(),
+                    self.num_bytes / mem::size_of::<f32>(),
+                    stream.raw(),
+                )
+                .result()?;
             },
             DataType::Bool => {
                 let b = value != 0.0;
                 let mask = if b { 0xFF } else { 0 };
                 unsafe {
-                    driver::sys::lib()
-                        .cuMemsetD8Async(self.device_ptr(), mask, self.num_bytes, stream.raw())
+                    cuMemsetD8Async(self.device_ptr(), mask, self.num_bytes, stream.raw())
                         .result()?;
                 }
             }

@@ -53,8 +53,9 @@ impl CudnnGraph {
         > = Cache::with_capacity(256);
         ENGINE_CACHE.get_or_insert(&(cudnn.id(), self.subgraph.clone()), || {
             let (graph, tensor_desc_map) = self.build(cudnn);
-            let engine =
-                Arc::new(Engine::choose_with_heuristic(&graph).expect("failed to get engine"));
+            let engine = Arc::new(Engine::choose_with_heuristic(&graph).unwrap_or_else(|e| {
+                panic!("failed to get engine: {e}, graph = {:#?}", self.subgraph)
+            }));
             (engine, Arc::new(tensor_desc_map))
         })
     }
