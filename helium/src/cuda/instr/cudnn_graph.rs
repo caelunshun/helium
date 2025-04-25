@@ -2,7 +2,6 @@ use crate::{
     DataType,
     backend::{InstrPerf, Instruction, TensorMap},
     cache::Cache,
-    conv::Conv2dParams,
     cuda::{
         Cuda,
         allocator::{DeviceMemory, StreamId},
@@ -22,6 +21,7 @@ use crate::{
     shape::Shape,
 };
 use ahash::AHashSet;
+use helium_ir::opgraph::op::conv::Conv2dParams;
 use slotmap::SecondaryMap;
 use std::{ffi::c_void, ptr, sync::Arc};
 

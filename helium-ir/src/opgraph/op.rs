@@ -1,10 +1,11 @@
 use crate::{
-    conv::Conv2dParams,
     data_type::{DataType, Scalar},
-    opgraph::{Descriptor, NodeId},
+    opgraph::{Descriptor, NodeId, op::conv::Conv2dParams},
     shape::Shape,
 };
 use slotmap::SecondaryMap;
+
+pub mod conv;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Op {

@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 helium-macros = { path = "../helium-macros" }
+helium-ir = { path = "../helium-ir" }
 ahash = "0.8"
 bumpalo = "3"
 bytemuck = { version = "1", features = ["derive", "extern_crate_alloc", "min_const_generics", "nightly_stdsimd", "nightly_portable_simd"] }

@@ -508,6 +508,7 @@ dependencies = [
  "flume",
  "gemm",
  "half",
+ "helium-ir",
  "helium-macros",
  "indoc",
  "insta",
@@ -529,6 +530,16 @@ dependencies = [
  "thread_local",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "helium-ir"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "half",
+ "serde",
+ "slotmap",
 ]
 
 [[package]]

@@ -1,5 +1,6 @@
-use crate::{DataType, Device, Param, Tensor, conv::Conv2dParams};
+use crate::{DataType, Device, Param, Tensor};
 use helium::initializer::Initializer;
+use helium_ir::opgraph::op::conv::Conv2dParams;
 use helium_macros::Module;
 use rand::Rng;
 

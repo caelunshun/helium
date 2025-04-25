@@ -2,7 +2,7 @@ use approx::assert_ulps_eq;
 use half::{bf16, f16};
 use helium::{
     DataType, Device, Param, Tensor,
-    conv::{Conv2dParams, PaddingMode},
+    op::conv::{Conv2dParams, PaddingMode},
 };
 
 const DEVICE: Device = Device::Cuda(0);

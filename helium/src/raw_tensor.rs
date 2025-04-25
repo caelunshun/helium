@@ -1,7 +1,6 @@
 use crate::{
     backend::{Backend, BackendExt},
     cache::Cache,
-    conv::Conv2dParams,
     data_type::{AsDataSlice, DataClass, DataSlice, DataType, DataVec, Scalar},
     device::Device,
     opgraph::{
@@ -14,6 +13,7 @@ use crate::{
     shape::Shape,
 };
 use ahash::AHashMap;
+use helium_ir::opgraph::op::conv::Conv2dParams;
 use parking_lot::Mutex;
 use slotmap::{Key, SecondaryMap};
 use std::{

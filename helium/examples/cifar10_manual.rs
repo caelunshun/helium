@@ -15,10 +15,10 @@
 use half::bf16;
 use helium::{
     DataType, Device, Module, Tensor,
-    conv::Conv2dParams,
     initializer::Initializer,
     loss::cross_entropy_loss,
     modules::{BatchNorm2d, Conv2d, batch_norm::ForwardMode, conv::Conv2dSettings},
+    op::conv::Conv2dParams,
     optimizer::{Optimizer, sgd::Sgd},
 };
 use rand::prelude::*;

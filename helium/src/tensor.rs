@@ -1,6 +1,5 @@
 use crate::{
     DataType, Device, Gradients, Param,
-    conv::Conv2dParams,
     data_type::{AsDataSlice, DataClass, DataClassTrait, DataTypeConversion, Float, Scalar},
     raw_tensor::RawTensor,
     tensor::tape::Tape,
@@ -8,6 +7,7 @@ use crate::{
 use ahash::AHashMap;
 use bytemuck::Pod;
 use half::{bf16, f16};
+use helium_ir::opgraph::op::conv::Conv2dParams;
 use pollster::FutureExt;
 use std::{
     fmt::Debug,
