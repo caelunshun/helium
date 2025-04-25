@@ -381,15 +381,15 @@ mod tests {
         let mut allocated_blocks: Vec<Block> = Vec::new();
         let mut rng = Pcg64Mcg::seed_from_u64(66);
         for _ in 0..25_000 {
-            if allocated_blocks.is_empty() || rng.gen_bool(0.4) {
-                let size = rng.gen_range(1024..1024 * 1024 * 32);
+            if allocated_blocks.is_empty() || rng.random_bool(0.4) {
+                let size = rng.random_range(1024..1024 * 1024 * 32);
                 let block = allocator.allocate(size, 256, None).unwrap();
                 assert_eq!(block.size, size);
                 assert!(block.is_aligned_to(256));
                 assert!(!allocated_blocks.iter().any(|b2| block.overlaps(b2)));
                 allocated_blocks.push(block);
             } else {
-                let i = rng.gen_range(0..allocated_blocks.len());
+                let i = rng.random_range(0..allocated_blocks.len());
                 let block = allocated_blocks.swap_remove(i);
                 allocator.deallocate(block);
             }

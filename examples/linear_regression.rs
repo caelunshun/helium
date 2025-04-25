@@ -13,7 +13,7 @@ fn main() {
         output: f32,
     }
 
-    let slopes = [(); 8].map(|_| rng.gen_range(0.1f32..=20.0));
+    let slopes = [(); 8].map(|_| rng.random_range(0.1f32..=20.0));
 
     let input_distr = Normal::new(50.0, 25.0).unwrap();
     let noise_distr = Normal::new(0.0, 2.0).unwrap();

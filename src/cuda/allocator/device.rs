@@ -215,9 +215,9 @@ mod tests {
         let mut allocated_memories: Vec<DeviceMemory> = Vec::new();
 
         for _ in 0..1_000 {
-            if rng.gen_bool(0.5) || allocated_memories.is_empty() {
-                let size = rng.gen_range(4..=64 * 1024 * 1024);
-                let align = rng.gen_range(1u64..=256).next_power_of_two();
+            if rng.random_bool(0.5) || allocated_memories.is_empty() {
+                let size = rng.random_range(4..=64 * 1024 * 1024);
+                let align = rng.random_range(1u64..=256).next_power_of_two();
                 let memory = allocator.allocate(size, align).unwrap();
                 assert!(!allocated_memories.iter().any(|mem| {
                     (mem.device_ptr() <= memory.device_ptr()
@@ -227,7 +227,7 @@ mod tests {
                 }));
                 allocated_memories.push(memory);
             } else {
-                let i = rng.gen_range(0..allocated_memories.len());
+                let i = rng.random_range(0..allocated_memories.len());
                 allocated_memories.swap_remove(i);
             }
         }

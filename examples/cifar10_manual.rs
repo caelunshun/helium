@@ -213,7 +213,7 @@ fn augment_image(
     _num_channels: usize,
     rng: &mut impl Rng,
 ) {
-    let noise_distr = Normal::new(0.0f32, rng.gen_range(0.001..0.1)).unwrap();
+    let noise_distr = Normal::new(0.0f32, rng.random_range(0.001..0.1)).unwrap();
     for sample in image {
         *sample = bf16::from_f32((sample.to_f32() + noise_distr.sample(rng)).clamp(0.0, 1.0));
     }
@@ -287,7 +287,7 @@ fn main() {
 
             let (batch_tx, batch_rx) = flume::bounded(16);
             let training_data = &training_data;
-            let mut reg_rng = Pcg64Mcg::from_rng(&mut rng).unwrap();
+            let mut reg_rng = Pcg64Mcg::from_rng(&mut rng);
             s.spawn(move || {
                 let mut indexes = (0..training_data.len()).collect::<Vec<_>>();
                 indexes.shuffle(&mut reg_rng);

@@ -42,7 +42,7 @@ impl Initializer {
             Initializer::One => Tensor::ones(shape, data_type, device),
             Initializer::XavierUniform => {
                 let x = (6.0f64 / (fan_in as f64 + fan_out as f64)).sqrt() as f32;
-                let samples: Vec<f32> = (0..size).map(|_| rng.gen_range(-x..=x)).collect();
+                let samples: Vec<f32> = (0..size).map(|_| rng.random_range(-x..=x)).collect();
                 Tensor::from_slice(samples, shape, device)
             }
             Initializer::KaimingNormal => {
