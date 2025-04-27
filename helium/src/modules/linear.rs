@@ -1,5 +1,6 @@
 use crate::{DataType, Device, Param, Tensor};
 use helium::initializer::Initializer;
+use helium_ir::opgraph::op::precision::Precision;
 use helium_macros::Module;
 use rand::Rng;
 
@@ -41,7 +42,14 @@ impl Linear {
     }
 
     pub fn forward(&self, x: &Tensor<2>) -> Tensor<2> {
-        let mut x = x.matmul(self.weights.value().to_data_type(x.data_type()));
+        let precision = match self.weights.value().data_type() {
+            DataType::Bf16 => Precision::MulBf16AccumF32,
+            DataType::F16 => Precision::MulF16AccumF32,
+            DataType::F32 => Precision::MulTf32AccumF32,
+            _ => unreachable!(),
+        };
+
+        let mut x = x.matmul(self.weights.value().to_data_type(x.data_type()), precision);
         if let Some(bias) = &self.bias {
             x = &x + bias.value().broadcast_to(x.shape());
         }

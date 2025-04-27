@@ -4,6 +4,7 @@ use helium::{
     DataType, Device, Param, Tensor,
     op::conv::{Conv2dParams, PaddingMode},
 };
+use helium_ir::opgraph::op::precision::Precision;
 
 const DEVICE: Device = Device::Cuda(0);
 
@@ -174,7 +175,10 @@ fn matmul_simple() {
         .transpose();
     let b = Tensor::<2>::from_array([[1.0, 2.0, 3.0], [2.0, 4.0, 6.0]], DEVICE).transpose();
 
-    let result = a.matmul(b).transpose().to_vec::<f32>();
+    let result = a
+        .matmul(b, Precision::MulTf32AccumF32)
+        .transpose()
+        .to_vec::<f32>();
 
     assert_ulps_eq!(result.as_slice(), &[2.0, 4.0, 6.0, 4.0, 8.0, 12.0][..]);
 }
@@ -196,7 +200,7 @@ fn matmul_bf16() {
         DEVICE,
     );
 
-    let result = a.matmul(b).to_vec::<f32>();
+    let result = a.matmul(b, Precision::MulBf16AccumF32).to_vec::<f32>();
 
     assert_ulps_eq!(
         result.as_slice(),
@@ -225,7 +229,10 @@ fn matmul_f16() {
     )
     .transpose();
 
-    let result = a.matmul(b).transpose().to_vec::<f32>();
+    let result = a
+        .matmul(b, Precision::MulF16AccumF32)
+        .transpose()
+        .to_vec::<f32>();
 
     assert_ulps_eq!(
         result.as_slice(),
@@ -239,7 +246,7 @@ fn matmul_large_matrices() {
     let a = Tensor::<2>::from_slice(vec![1.0f32; 10000], [100, 100], DEVICE);
     let b = Tensor::<2>::from_slice(vec![0.5f32; 10000], [100, 100], DEVICE);
 
-    let result = a.matmul(b).to_vec::<f32>();
+    let result = a.matmul(b, Precision::MulTf32AccumF32).to_vec::<f32>();
 
     assert_ulps_eq!(result.as_slice(), &[50.0f32; 10000][..], epsilon = 1e-3);
 }
@@ -298,7 +305,7 @@ fn matmul_batched() {
     )
     .transpose();
 
-    let result = a.matmul(b).transpose();
+    let result = a.matmul(b, Precision::MulBf16AccumF32).transpose();
     assert_eq!(result.shape(), [2, 3, 3]);
     let result = result.to_vec::<f32>();
 

@@ -1,4 +1,5 @@
 use helium::{Device, Param, Tensor};
+use helium_ir::opgraph::op::precision::Precision;
 use rand::prelude::*;
 use rand_distr::Normal;
 use rand_pcg::Pcg64Mcg;
@@ -44,7 +45,10 @@ fn main() {
             let input = Tensor::<2>::from_slice(input, [batch_size, 8], device);
             let target = Tensor::<2>::from_slice(target, [batch_size, 1], device);
 
-            let result = weights.value().matmul(input.transpose()).transpose();
+            let result = weights
+                .value()
+                .matmul(input.transpose(), Precision::MulTf32AccumF32)
+                .transpose();
             let loss = (result - target).pow_scalar(2.0).reduce_mean::<1>(2);
 
             let grads = loss.clone().backward();

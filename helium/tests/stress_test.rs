@@ -1,4 +1,5 @@
 use helium::{Device, Param, Tensor};
+use helium_ir::opgraph::op::precision::Precision;
 use pollster::FutureExt;
 use rand::{Rng, SeedableRng};
 use rand_distr::{Distribution, StandardNormal};
@@ -64,11 +65,13 @@ fn determinism_stress_test() {
 }
 
 fn do_ops(a1: &Tensor<2>, a2: &Tensor<2>, x: &Tensor<1>) -> Tensor<1> {
-    let y = a1.matmul(x.reshape([x.shape()[0], 1])).sigmoid();
+    let y = a1
+        .matmul(x.reshape([x.shape()[0], 1]), Precision::MulTf32AccumF32)
+        .sigmoid();
     let y = y
         .reduce_sum::<2>(1)
         .broadcast_to([x.shape()[0], x.shape()[0]]);
-    let y = a2.matmul(y).cos() + 1.0;
+    let y = a2.matmul(y, Precision::MulTf32AccumF32).cos() + 1.0;
     y.reduce_mean::<2>(1).reshape([x.shape()[0]])
 }
 

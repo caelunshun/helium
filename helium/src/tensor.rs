@@ -7,7 +7,7 @@ use crate::{
 use ahash::AHashMap;
 use bytemuck::Pod;
 use half::{bf16, f16};
-use helium_ir::opgraph::op::conv::Conv2dParams;
+use helium_ir::opgraph::op::{conv::Conv2dParams, precision::Precision};
 use pollster::FutureExt;
 use std::{
     fmt::Debug,
@@ -436,12 +436,15 @@ impl<const D: usize> Tensor<D, Float> {
 
     /// Row-major matrix multiplication: `self * rhs`.
     /// Optionally batched.
-    pub fn matmul(&self, rhs: impl AsTensor<D>) -> Self {
+    ///
+    /// The output type is implicitly converted to match the data type of `self`,
+    /// regardless of the selected precision.
+    pub fn matmul(&self, rhs: impl AsTensor<D>, precision: Precision) -> Self {
         self.op_binary(
             rhs.as_tensor(),
-            |a, b| a.matmul(b),
-            |_a, b, flow| b.matmul(flow.transpose()).transpose(),
-            |a, _b, flow| a.transpose().matmul(flow),
+            move |a, b| a.matmul(b, precision),
+            move |_a, b, flow| b.matmul(flow.transpose(), precision).transpose(),
+            move |a, _b, flow| a.transpose().matmul(flow, precision),
         )
         .checkpoint()
     }

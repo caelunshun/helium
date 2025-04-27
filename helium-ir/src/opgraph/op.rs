@@ -1,6 +1,9 @@
 use crate::{
     data_type::{DataType, Scalar},
-    opgraph::{Descriptor, NodeId, op::conv::Conv2dParams},
+    opgraph::{
+        Descriptor, NodeId,
+        op::{conv::Conv2dParams, precision::Precision},
+    },
     shape::Shape,
 };
 use slotmap::SecondaryMap;
@@ -63,7 +66,10 @@ impl Op {
                 shape.set_dim_size(shape.num_dims() - 2, input_a.shape.dim_at(-2));
                 shape.set_dim_size(shape.num_dims() - 1, input_b.shape.dim_at(-1));
 
-                Descriptor { shape, ..input_a }
+                Descriptor {
+                    shape,
+                    data_type: op.precision.accumulator_type(),
+                }
             }
             Op::UnaryPointwise(UnaryPointwise { input, .. })
             | Op::BinaryPointwise(BinaryPointwise { lhs: input, .. }) => {
@@ -265,10 +271,14 @@ pub enum OpKind {
 
 /// Batched multiplication of column-major matrices stored in the last
 /// two dimensions of the input tensors `A` and `B`.
+///
+/// The inputs to this operator can be any float types (including mismatched ones).
+/// The output type equals the accumulator type of the selected `Precision`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Matmul {
     pub input_a: NodeId,
     pub input_b: NodeId,
+    pub precision: Precision,
 }
 
 /// Pointwise operator with one input.

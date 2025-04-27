@@ -13,7 +13,7 @@ use crate::{
     shape::Shape,
 };
 use ahash::AHashMap;
-use helium_ir::opgraph::op::conv::Conv2dParams;
+use helium_ir::opgraph::op::{conv::Conv2dParams, precision::Precision};
 use parking_lot::Mutex;
 use slotmap::{Key, SecondaryMap};
 use std::{
@@ -176,7 +176,10 @@ impl RawTensor {
     }
 
     /// Row-major matrix multiplication.
-    pub fn matmul(self, rhs: Self) -> Self {
+    ///
+    /// The output type is automatically converted to match
+    /// the data type of `self`.
+    pub fn matmul(self, rhs: Self, precision: Precision) -> Self {
         let d = self.num_dims();
         if d < 2 {
             panic!("matrix multiplication requires tensors of dimension >= 2");
@@ -211,13 +214,19 @@ impl RawTensor {
 
         let (cx, _) = self.make_graph();
         let cx = rhs.to_graph(cx);
-        Self::from_op(
+        let matmul = Self::from_op(
             &cx,
             Op::Matmul(op::Matmul {
                 input_a: self.node(&cx),
                 input_b: rhs.node(&cx),
+                precision,
             }),
-        )
+        );
+        if precision.accumulator_type() != self.data_type() {
+            matmul.into_data_type(self.data_type())
+        } else {
+            matmul
+        }
     }
 
     /// Batched 2D convolution. Image tensor layout is `NHWC` (channel dimension last).
