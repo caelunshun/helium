@@ -8,10 +8,18 @@ helium-ir = { path = "../helium-ir" }
 slotmap = "1"
 parking_lot = "0.12"
 ahash = "0.8"
+indoc = "2"
+tar = "0.4"
+tempfile = "3"
+thiserror = "2"
 
 fd-lock = { version = "4", optional = true }
 blake3 = { version = "1", optional = true }
 bincode = { version = "2", optional = true }
+directories = { version = "6", optional = true }
+
+[build-dependencies]
+tar = "0.4"
 
 [dependencies.cudarc]
 git = "https://github.com/caelunshun/cudarc"
@@ -21,4 +29,4 @@ features = ["cuda-version-from-build-system", "std", "dynamic-linking", "nvrtc"]
 
 [features]
 default = ["disk-cache"]
-disk-cache = ["dep:fd-lock", "dep:blake3", "dep:bincode"]
+disk-cache = ["dep:fd-lock", "dep:blake3", "dep:bincode", "dep:directories"]
