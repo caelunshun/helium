@@ -1,5 +1,5 @@
 [workspace]
-members = ["helium", "helium-macros", "helium-ir"]
+members = ["helium", "helium-macros", "helium-ir", "helium-kernel-generator"]
 resolver = "3"
 
 [profile.dev]

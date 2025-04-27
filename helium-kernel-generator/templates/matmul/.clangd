@@ -1,0 +1,4 @@
+CompileFlags:
+    Add:
+        - "-I../../cutlass/include"
+        - "-I/usr/local/cuda/include"

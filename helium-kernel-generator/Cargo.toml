@@ -1,0 +1,24 @@
+[package]
+name = "helium-kernel-generator"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+helium-ir = { path = "../helium-ir" }
+slotmap = "1"
+parking_lot = "0.12"
+ahash = "0.8"
+
+fd-lock = { version = "4", optional = true }
+blake3 = { version = "1", optional = true }
+bincode = { version = "2", optional = true }
+
+[dependencies.cudarc]
+git = "https://github.com/caelunshun/cudarc"
+branch = "fix-nvrtc-use-after-free"
+default-features = false
+features = ["cuda-version-from-build-system", "std", "dynamic-linking", "nvrtc"]
+
+[features]
+default = ["disk-cache"]
+disk-cache = ["dep:fd-lock", "dep:blake3", "dep:bincode"]

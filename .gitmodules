@@ -1,0 +1,3 @@
+[submodule "helium-kernel-generator/cutlass"]
+	path = helium-kernel-generator/cutlass
+	url = https://github.com/NVIDIA/cutlass
