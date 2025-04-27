@@ -6,6 +6,7 @@ use crate::{
 use slotmap::SecondaryMap;
 
 pub mod conv;
+pub mod precision;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Op {
