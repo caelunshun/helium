@@ -86,14 +86,15 @@ impl BundledHeaders {
         static HEADERS: OnceLock<BundledHeaders> = OnceLock::new();
 
         HEADERS.get_or_try_init(|| {
-            static TARBALL_CUDA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cuda.tar"));
+            static TARBALL_CUDA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cuda.tar.zst"));
             static TARBALL_CUTLASS: &[u8] =
-                include_bytes!(concat!(env!("OUT_DIR"), "/cutlass.tar"));
+                include_bytes!(concat!(env!("OUT_DIR"), "/cutlass.tar.zst"));
 
             let dir = TempDir::new()?;
 
-            tar::Archive::new(Cursor::new(TARBALL_CUDA)).unpack(dir.path())?;
-            tar::Archive::new(Cursor::new(TARBALL_CUTLASS)).unpack(dir.path())?;
+            tar::Archive::new(zstd::Decoder::new(Cursor::new(TARBALL_CUDA))?).unpack(dir.path())?;
+            tar::Archive::new(zstd::Decoder::new(Cursor::new(TARBALL_CUTLASS))?)
+                .unpack(dir.path())?;
 
             Ok::<_, crate::Error>(BundledHeaders { dir })
         })
