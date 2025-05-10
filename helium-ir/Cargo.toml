@@ -8,3 +8,5 @@ bytemuck = { version = "1", features = ["derive"] }
 half = { version = "2", features = ["bytemuck"] }
 serde = { version = "1", features = ["derive"] }
 slotmap = "1"
+ahash = "0.8"
+indexmap = "2"

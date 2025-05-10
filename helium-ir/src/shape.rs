@@ -26,6 +26,16 @@ impl Shape {
         &self.0
     }
 
+    pub fn strides(&self) -> impl Iterator<Item = usize> {
+        let mut strides = vec![0usize; self.num_dims()];
+        let mut stride = 1;
+        for (i, dim) in self.dims().iter().enumerate().rev() {
+            strides[i] = stride;
+            stride *= *dim;
+        }
+        strides.into_iter()
+    }
+
     pub fn num_dims(&self) -> usize {
         self.0.len()
     }

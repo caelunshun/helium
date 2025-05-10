@@ -233,7 +233,7 @@ fn push_if_absent<T: Eq>(vec: &mut Vec<T>, val: T) {
 fn remove_element<T: Eq>(vec: &mut Vec<T>, val: T) {
     let pos = vec.iter().position(|x| x == &val);
     if let Some(pos) = pos {
-        vec.swap_remove(pos);
+        vec.remove(pos);
     }
 }
 

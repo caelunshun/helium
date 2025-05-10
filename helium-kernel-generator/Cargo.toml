@@ -19,13 +19,15 @@ blake3 = { version = "1", optional = true }
 bincode = { version = "2", optional = true }
 directories = { version = "6", optional = true }
 
+[dev-dependencies]
+rstest = "0.25"
+
 [build-dependencies]
 tar = "0.4"
 zstd = "0.13"
 
 [dependencies.cudarc]
-git = "https://github.com/caelunshun/cudarc"
-branch = "fix-nvrtc-use-after-free"
+version = "0.16.4"
 default-features = false
 features = ["cuda-version-from-build-system", "std", "dynamic-linking", "nvrtc"]
 

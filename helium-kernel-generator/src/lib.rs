@@ -2,6 +2,8 @@
 
 pub mod architecture;
 mod builder;
+mod cute;
 pub mod error;
+pub mod generators;
 
 pub use error::Error;

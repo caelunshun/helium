@@ -1,5 +1,6 @@
 // SM80+ generic matmul, with flexible epilogue & mainloop fusions, v2
 
+#include "cute/tensor_impl.hpp"
 #include <cstdint>
 #include <cuda_runtime.h>
 #include <cute/arch/mma_sm80.hpp>
@@ -16,60 +17,60 @@ template <typename T> void debug_type(T &&var) {
   static_assert(always_false<T>::value, "debug type information:");
 }
 
-struct IdentityMainloopFusion {
-  template <typename TensorA> __device__ void apply_thr_a(TensorA &tensor_a) {}
+// struct IdentityMainloopFusion {
+//   template <typename TensorA> __device__ void apply_thr_a(TensorA &tensor_a) {}
 
-  template <typename TensorB> __device__ void apply_thr_b(TensorB &tensor_b) {}
-};
+//   template <typename TensorB> __device__ void apply_thr_b(TensorB &tensor_b) {}
+// };
 
-template <typename LayoutGmemC, typename TiledCopyR2G_C, typename TileSize>
-struct SimpleEpilogue {
-  LayoutGmemC _layout_gmem_c;
-  TiledCopyR2G_C _tiled_copy_r2g_c;
-  float *_raw_gmem_c;
+// template <typename LayoutGmemC, typename TiledCopyR2G_C, typename TileSize>
+// struct SimpleEpilogue {
+//   LayoutGmemC _layout_gmem_c;
+//   TiledCopyR2G_C _tiled_copy_r2g_c;
+//   float *_raw_gmem_c;
 
-  __device__ auto _gmem_c() { return make_tensor(_raw_gmem_c, _layout_gmem_c); }
+//   __device__ auto _gmem_c() { return make_tensor(_raw_gmem_c, _layout_gmem_c); }
 
-  template <typename TensorC> __device__ void apply_tile_c(TensorC tensor_c) {
-    const auto coord_c = make_coord(blockIdx.x, blockIdx.y);
-    auto tile_gmem_c = local_tile(
-        _gmem_c(), make_shape(size<0>(TileSize{}), size<1>(TileSize{})),
-        coord_c);
+//   template <typename TensorC> __device__ void apply_tile_c(TensorC tensor_c) {
+//     const auto coord_c = make_coord(blockIdx.x, blockIdx.y);
+//     auto tile_gmem_c = local_tile(
+//         _gmem_c(), make_shape(size<0>(TileSize{}), size<1>(TileSize{})),
+//         coord_c);
 
-    auto thr_copy_r2g_c = _tiled_copy_r2g_c.get_slice(threadIdx.x);
-    auto thr_smem_c = thr_copy_r2g_c.partition_S(tensor_c);
-    auto thr_gmem_c = thr_copy_r2g_c.partition_D(tile_gmem_c);
+//     auto thr_copy_r2g_c = _tiled_copy_r2g_c.get_slice(threadIdx.x);
+//     auto thr_smem_c = thr_copy_r2g_c.partition_S(tensor_c);
+//     auto thr_gmem_c = thr_copy_r2g_c.partition_D(tile_gmem_c);
 
-    // Convert to float
-    auto thr_reg_c = make_fragment_like(thr_smem_c);
-    copy(thr_smem_c, thr_reg_c);
-    auto thr_reg_c_converted = make_tensor<float>(thr_reg_c.layout());
-    transform(thr_reg_c, thr_reg_c_converted,
-              [](auto x) { return static_cast<float>(x); });
+//     // Convert to float
+//     auto thr_reg_c = make_fragment_like(thr_smem_c);
+//     copy(thr_smem_c, thr_reg_c);
+//     auto thr_reg_c_converted = make_tensor<float>(thr_reg_c.layout());
+//     transform(thr_reg_c, thr_reg_c_converted,
+//               [](auto x) { return static_cast<float>(x); });
 
-    // Check if we need to predicate the copy
-    const auto end_m = (blockIdx.x + 1) * size<0>(TileSize{});
-    const auto end_n = (blockIdx.y + 1) * size<1>(TileSize{});
-    if (end_m <= size<0>(_layout_gmem_c) && end_n <= size<1>(_layout_gmem_c)) {
-      copy(_tiled_copy_r2g_c, thr_reg_c_converted, thr_gmem_c);
-    } else {
-      auto dummy = make_identity_tensor(
-          make_shape(size<0>(_layout_gmem_c), size<1>(_layout_gmem_c)));
-      auto tile_dummy = local_tile(
-          dummy, make_shape(size<0>(TileSize{}), size<1>(TileSize{})), coord_c);
-      auto thr_dummy = thr_copy_r2g_c.partition_D(tile_dummy);
+//     // Check if we need to predicate the copy
+//     const auto end_m = (blockIdx.x + 1) * size<0>(TileSize{});
+//     const auto end_n = (blockIdx.y + 1) * size<1>(TileSize{});
+//     if (end_m <= size<0>(_layout_gmem_c) && end_n <= size<1>(_layout_gmem_c)) {
+//       copy(_tiled_copy_r2g_c, thr_reg_c_converted, thr_gmem_c);
+//     } else {
+//       auto dummy = make_identity_tensor(
+//           make_shape(size<0>(_layout_gmem_c), size<1>(_layout_gmem_c)));
+//       auto tile_dummy = local_tile(
+//           dummy, make_shape(size<0>(TileSize{}), size<1>(TileSize{})), coord_c);
+//       auto thr_dummy = thr_copy_r2g_c.partition_D(tile_dummy);
 
-      auto thr_pred = make_tensor<bool>(thr_reg_c_converted.layout());
-      for (int i = 0; i < size(thr_pred); i++) {
-        const auto coord = thr_dummy(i);
-        thr_pred(i) = get<0>(coord) < size<0>(_layout_gmem_c) &&
-                      get<1>(coord) < size<1>(_layout_gmem_c);
-      }
+//       auto thr_pred = make_tensor<bool>(thr_reg_c_converted.layout());
+//       for (int i = 0; i < size(thr_pred); i++) {
+//         const auto coord = thr_dummy(i);
+//         thr_pred(i) = get<0>(coord) < size<0>(_layout_gmem_c) &&
+//                       get<1>(coord) < size<1>(_layout_gmem_c);
+//       }
 
-      copy_if(thr_pred, thr_reg_c_converted, thr_gmem_c);
-    }
-  }
-};
+//       copy_if(thr_pred, thr_reg_c_converted, thr_gmem_c);
+//     }
+//   }
+// };
 
 template <typename InDtypeA, typename InDtypeB, typename GemmDtypeA,
           typename GemmDtypeB, typename DtypeAccum, typename DtypeOut,
@@ -311,72 +312,72 @@ struct Matmul {
   }
 };
 
-using TileSize = Shape<_256, _128, _32>;
+// using TileSize = Shape<_256, _128, _32>;
 
-__global__
-__launch_bounds__(256) void matmul_bf16_into_f32(bfloat16_t *a, bfloat16_t *b,
-                                                 float *c, uint32_t m,
-                                                 uint32_t n, uint32_t k) {
-  auto tiled_copy_g2s_a = make_tiled_copy(
-      Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<uint128_t>, bfloat16_t>{},
-      Layout<Shape<_64, _4>, Stride<_4, _1>>{},
-      Layout<Shape<_4, _8>, Stride<_8, _1>>{});
-  auto tiled_copy_g2s_b = make_tiled_copy(
-      Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<uint128_t>, bfloat16_t>{},
-      Layout<Shape<_16, _16>>{}, Layout<Shape<_8, _2>>{});
+// __global__
+// __launch_bounds__(256) void matmul_bf16_into_f32(bfloat16_t *a, bfloat16_t *b,
+//                                                  float *c, uint32_t m,
+//                                                  uint32_t n, uint32_t k) {
+//   auto tiled_copy_g2s_a = make_tiled_copy(
+//       Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<uint128_t>, bfloat16_t>{},
+//       Layout<Shape<_64, _4>, Stride<_4, _1>>{},
+//       Layout<Shape<_4, _8>, Stride<_8, _1>>{});
+//   auto tiled_copy_g2s_b = make_tiled_copy(
+//       Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<uint128_t>, bfloat16_t>{},
+//       Layout<Shape<_16, _16>>{}, Layout<Shape<_8, _2>>{});
 
-  auto tiled_mma = make_tiled_mma(SM80_16x8x16_F32BF16BF16F32_TN{},
-                                  Layout<Shape<_2, _4>>{}, TileSize{});
+//   auto tiled_mma = make_tiled_mma(SM80_16x8x16_F32BF16BF16F32_TN{},
+//                                   Layout<Shape<_2, _4>>{}, TileSize{});
 
-  auto tiled_copy_s2r_a =
-      make_tiled_copy_A(Copy_Atom<SM75_U32x4_LDSM_N, bfloat16_t>{}, tiled_mma);
-  auto tiled_copy_s2r_b =
-      make_tiled_copy_B(Copy_Atom<SM75_U16x8_LDSM_T, bfloat16_t>{}, tiled_mma);
+//   auto tiled_copy_s2r_a =
+//       make_tiled_copy_A(Copy_Atom<SM75_U32x4_LDSM_N, bfloat16_t>{}, tiled_mma);
+//   auto tiled_copy_s2r_b =
+//       make_tiled_copy_B(Copy_Atom<SM75_U16x8_LDSM_T, bfloat16_t>{}, tiled_mma);
 
-  auto tiled_copy_r2g_c =
-      make_tiled_copy(Copy_Atom<UniversalCopy<uint128_t>, float>{},
-                      Layout<Shape<_8, _32>, Stride<_32, _1>>{},
-                      Layout<Shape<_32, _4>, Stride<_4, _1>>{});
+//   auto tiled_copy_r2g_c =
+//       make_tiled_copy(Copy_Atom<UniversalCopy<uint128_t>, float>{},
+//                       Layout<Shape<_8, _32>, Stride<_32, _1>>{},
+//                       Layout<Shape<_32, _4>, Stride<_4, _1>>{});
 
-  auto layout_gmem_a = make_layout(make_shape(m, k), make_stride(k, _1{}));
-  auto layout_gmem_b = make_layout(make_shape(n, k), make_stride(_1{}, n));
-  auto layout_gmem_c = make_layout(make_shape(m, n), make_stride(n, _1{}));
+//   auto layout_gmem_a = make_layout(make_shape(m, k), make_stride(k, _1{}));
+//   auto layout_gmem_b = make_layout(make_shape(n, k), make_stride(_1{}, n));
+//   auto layout_gmem_c = make_layout(make_shape(m, n), make_stride(n, _1{}));
 
-  using Epilogue = SimpleEpilogue<decltype(layout_gmem_c),
-                                  decltype(tiled_copy_r2g_c), TileSize>;
-  using MatmulInstance =
-      Matmul<bfloat16_t, bfloat16_t, bfloat16_t, bfloat16_t, float, bfloat16_t,
-             decltype(layout_gmem_a), decltype(layout_gmem_b),
-             IdentityMainloopFusion, Epilogue, TileSize,
-             Layout<Shape<_256, _32>, Stride<Int<40>, _1>>,
-             Layout<Shape<_128, _32>, Stride<_1, Int<136>>>,
-             Layout<Shape<_256, _128>, Stride<Int<136>, _1>>,
-             decltype(tiled_copy_g2s_a), decltype(tiled_copy_g2s_b),
-             decltype(tiled_copy_s2r_a), decltype(tiled_copy_s2r_b),
-             decltype(tiled_mma), 2>;
+//   using Epilogue = SimpleEpilogue<decltype(layout_gmem_c),
+//                                   decltype(tiled_copy_r2g_c), TileSize>;
+//   using MatmulInstance =
+//       Matmul<bfloat16_t, bfloat16_t, bfloat16_t, bfloat16_t, float, bfloat16_t,
+//              decltype(layout_gmem_a), decltype(layout_gmem_b),
+//              IdentityMainloopFusion, Epilogue, TileSize,
+//              Layout<Shape<_256, _32>, Stride<Int<40>, _1>>,
+//              Layout<Shape<_128, _32>, Stride<_1, Int<136>>>,
+//              Layout<Shape<_256, _128>, Stride<Int<136>, _1>>,
+//              decltype(tiled_copy_g2s_a), decltype(tiled_copy_g2s_b),
+//              decltype(tiled_copy_s2r_a), decltype(tiled_copy_s2r_b),
+//              decltype(tiled_mma), 2>;
 
-  extern __shared__ char shared_storage_raw[];
+//   extern __shared__ char shared_storage_raw[];
 
-  static_assert(sizeof(typename MatmulInstance::SharedStorage) <= 100000);
-  auto shared_storage =
-      reinterpret_cast<typename MatmulInstance::SharedStorage *>(
-          shared_storage_raw);
+//   static_assert(sizeof(typename MatmulInstance::SharedStorage) <= 100000);
+//   auto shared_storage =
+//       reinterpret_cast<typename MatmulInstance::SharedStorage *>(
+//           shared_storage_raw);
 
-  auto matmul = MatmulInstance{
-      ._layout_gmem_a = layout_gmem_a,
-      ._layout_gmem_b = layout_gmem_b,
-      ._mainloop_fusion = IdentityMainloopFusion{},
-      ._epilogue = Epilogue{._layout_gmem_c = layout_gmem_c,
-                            ._tiled_copy_r2g_c = tiled_copy_r2g_c,
-                            ._raw_gmem_c = c},
-      ._tile_size = {},
-      ._tiled_copy_g2s_a = tiled_copy_g2s_a,
-      ._tiled_copy_g2s_b = tiled_copy_g2s_b,
-      ._tiled_copy_s2r_a = tiled_copy_s2r_a,
-      ._tiled_copy_s2r_b = tiled_copy_s2r_b,
-      ._tiled_mma = tiled_mma,
-      ._raw_gmem_a = a,
-      ._raw_gmem_b = b,
-      ._shared_storage = shared_storage};
-  matmul.run();
-}
+//   auto matmul = MatmulInstance{
+//       ._layout_gmem_a = layout_gmem_a,
+//       ._layout_gmem_b = layout_gmem_b,
+//       ._mainloop_fusion = IdentityMainloopFusion{},
+//       ._epilogue = Epilogue{._layout_gmem_c = layout_gmem_c,
+//                             ._tiled_copy_r2g_c = tiled_copy_r2g_c,
+//                             ._raw_gmem_c = c},
+//       ._tile_size = {},
+//       ._tiled_copy_g2s_a = tiled_copy_g2s_a,
+//       ._tiled_copy_g2s_b = tiled_copy_g2s_b,
+//       ._tiled_copy_s2r_a = tiled_copy_s2r_a,
+//       ._tiled_copy_s2r_b = tiled_copy_s2r_b,
+//       ._tiled_mma = tiled_mma,
+//       ._raw_gmem_a = a,
+//       ._raw_gmem_b = b,
+//       ._shared_storage = shared_storage};
+//   matmul.run();
+// }
