@@ -1,3 +1,20 @@
+#include "cute/tensor_impl.hpp"
+#include <cstdint>
+#include <cuda_runtime.h>
+#include <cute/arch/mma_sm80.hpp>
+#include <cute/layout.hpp>
+#include <cute/numeric/integral_constant.hpp>
+#include <cute/numeric/numeric_types.hpp>
+#include <cute/tensor.hpp>
+#include <math_functions.h>
+
+using namespace cute;
+
+template <typename T> struct always_false : std::false_type {};
+
+template <typename T> void debug_type(T &&var) {
+  static_assert(always_false<T>::value, "debug type information:");
+}
 // SM80+ generic matmul, with flexible epilogue & mainloop fusions, v2
 
 // struct IdentityMainloopFusion {
@@ -369,3 +386,116 @@ struct Matmul {
 //       ._shared_storage = shared_storage};
 //   matmul.run();
 // }
+
+struct MainloopFusion {
+    template <typename TensorA>
+    __device__ void apply_thr_a(TensorA &tensor_a) {
+        transform(tensor_a, [](auto x) {
+            float local0 = static_cast<float>(x);
+            
+            return local0;
+        });
+    }
+
+    template <typename TensorB>
+    __device__ void apply_thr_b(TensorB &tensor_b) {
+         transform(tensor_b, [](auto x) {
+            float local1 = static_cast<float>(x);
+            
+            return local1;
+        });
+    }
+};
+
+template<typename TileSize>
+struct Epilogue {
+    float *leaf0;
+
+    template <typename TensorC>
+    __device__ void apply_tile_c(TensorC tensor_c) {
+        using LayoutSmemC = decltype(tensor_c.layout());
+        {
+    const auto coord_c = make_coord(blockIdx.x, blockIdx.y);
+    auto layout_gmem_out = Layout<Shape<Int<256>, Int<256>>, Stride<Int<256>, Int<1>>>{};
+    auto gmem_out = make_tensor(leaf0, layout_gmem_out);
+
+    auto tiled_copy = make_tiled_copy(Copy_Atom<UniversalCopy<uint32_t>, float>{},
+        Layout<Shape<Int<8>, Int<32>>, Stride<Int<32>, Int<1>>>{},
+        Layout<Shape<Int<16>, Int<4>>, Stride<Int<4>, Int<1>>>{});
+    auto thr_copy = tiled_copy.get_slice(threadIdx.x);
+    auto thr_smem_c = thr_copy.partition_S(tensor_c);
+    auto thr_reg_c = make_fragment_like(thr_smem_c);
+    auto thr_gmem_out = thr_copy.partition_D(gmem_out);
+    copy(tiled_copy, thr_smem_c, thr_reg_c);
+    
+    auto thr_reg_c_converted = make_tensor<float>(thr_reg_c.layout());
+    transform(thr_reg_c, thr_reg_c_converted, [](auto x) {
+        float local2 = static_cast<float>(x);
+        
+        return static_cast<float>(local2);
+    });
+
+    // Check if we need to predicate the copy
+     const auto end_m = (blockIdx.x + 1) * size<0>(TileSize{});
+     const auto end_n = (blockIdx.y + 1) * size<1>(TileSize{});
+     if (end_m <= size<0>(layout_gmem_out) && end_n <= size<1>(layout_gmem_out)) {
+        copy(tiled_copy, thr_reg_c_converted, thr_gmem_out);
+     } else {
+       auto dummy = make_identity_tensor(
+           make_shape(size<0>(layout_gmem_out), size<1>(layout_gmem_out)));
+       auto tile_dummy = local_tile(
+           dummy, make_shape(size<0>(TileSize{}), size<1>(TileSize{})), coord_c);
+       auto thr_dummy = thr_copy.partition_D(tile_dummy);
+
+       auto thr_pred = make_tensor<bool>(thr_reg_c_converted.layout());
+       for (int i = 0; i < size(thr_pred); i++) {
+         const auto coord = thr_dummy(i);
+         thr_pred(i) = get<0>(coord) < size<0>(layout_gmem_out) &&
+                       get<1>(coord) < size<1>(layout_gmem_out);
+       }
+
+       copy_if(thr_pred, thr_reg_c_converted, thr_gmem_out);
+     }
+}
+
+    }
+};
+
+__global__ __launch_bounds__(256) void matmul(half_t *a, float *b, float *leaf0) {
+    using TileSize = Shape<Int<128>, Int<128>, Int<64>>;
+
+    auto tiled_copy_g2s_a = make_tiled_copy(Copy_Atom<SM80_CP_ASYNC_CACHEGLOBAL<uint128_t>, half_t>{}, Layout<Shape<Int<32>, Int<8>>, Stride<Int<8>, Int<1>>>{}, Layout<Shape<Int<4>, Int<8>>, Stride<Int<8>, Int<1>>>{});
+    auto tiled_copy_g2s_b = make_tiled_copy(Copy_Atom<SM80_CP_ASYNC_CACHEGLOBAL<uint128_t>, float>{}, Layout<Shape<Int<16>, Int<16>>, Stride<Int<16>, Int<1>>>{}, Layout<Shape<Int<8>, Int<4>>, Stride<Int<4>, Int<1>>>{});
+    
+    auto tiled_mma = make_tiled_mma(SM80_16x8x16_F32F16F16F32_TN{}, Layout<Shape<_2, _4>>{}, TileSize{});
+    
+    auto tiled_copy_s2r_a = make_tiled_copy_A(Copy_Atom<SM75_U32x4_LDSM_N, half_t>{}, tiled_mma);
+    auto tiled_copy_s2r_b = make_tiled_copy_B(Copy_Atom<SM75_U32x4_LDSM_N, float>{}, tiled_mma);
+    
+    using MatmulInstance = Matmul<half_t, float, half_t, half_t, float,
+        float, Layout<Shape<Int<256>, Int<256>>, Stride<Int<256>, Int<1>>>, Layout<Shape<Int<256>, Int<256>>, Stride<Int<256>, Int<1>>>, MainloopFusion, Epilogue<TileSize>,
+        TileSize, Layout<Shape<Int<128>, Int<64>>, Stride<Int<72>, Int<1>>>, Layout<Shape<Int<128>, Int<64>>, Stride<Int<68>, Int<1>>>, Layout<Shape<Int<128>, Int<128>>, Stride<Int<1>, Int<132>>>, decltype(tiled_copy_g2s_a),
+        decltype(tiled_copy_g2s_b), decltype(tiled_copy_s2r_a), decltype(tiled_copy_s2r_b),
+        decltype(tiled_mma), 2>;
+        
+    extern __shared__ char shared_storage_raw[];
+    
+    auto shared_storage = reinterpret_cast<typename MatmulInstance::SharedStorage *>(shared_storage_raw);
+    
+    auto matmul = MatmulInstance {
+        ._layout_gmem_a = {},
+        ._layout_gmem_b = {},
+        ._mainloop_fusion = MainloopFusion{},
+        ._epilogue = Epilogue<TileSize>{ .leaf0 = leaf0 },
+        ._tile_size = {},
+        ._tiled_copy_g2s_a = tiled_copy_g2s_a,
+        ._tiled_copy_g2s_b = tiled_copy_g2s_b,
+        ._tiled_copy_s2r_a = tiled_copy_s2r_a,
+        ._tiled_copy_s2r_b = tiled_copy_s2r_b,
+        ._tiled_mma = tiled_mma,
+        ._raw_gmem_a = a,
+        ._raw_gmem_b = b,
+        ._shared_storage = shared_storage};
+    matmul.run();
+}
+

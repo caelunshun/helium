@@ -12,21 +12,32 @@
 //! scalar alpha and beta values and an accumulator matrix. Those extra operations are more
 //! elegantly expressed as optional mainloop (for alpha/beta) and epilogue (for accumulator matrix) fusions.
 
-use crate::cute::Layout;
+use crate::{architecture::Architecture, cute::Layout};
 use ahash::{AHashMap, AHashSet};
 use helium_ir::{
-    opgraph::{Intermediate, Node, NodeId, OpGraph, op::Op, subgraph::OpSubgraph},
-    shape::Shape,
+    data_type::DataType,
+    opgraph::{
+        Intermediate, Node, NodeId,
+        op::{Matmul, Op},
+        subgraph::OpSubgraph,
+    },
 };
 
-mod emit;
+mod copy_synthesis;
+mod sm80;
 
 /// Generator for a valid matmul fusion.
 #[derive(Debug)]
 pub struct MatmulGenerator {
     op_subgraph: OpSubgraph,
+    layout_gmem_a: Layout,
+    layout_gmem_b: Layout,
     input_a_root: NodeId,
     input_b_root: NodeId,
+    load_a_dtype: DataType,
+    load_b_dtype: DataType,
+    accumulator_dtype: DataType,
+    matmul_op: Matmul,
     matmul_node: NodeId,
     leafs: Vec<Leaf>,
 }
@@ -44,6 +55,7 @@ struct Leaf {
     /// by using column-major instead of row-major strides.
     /// More complex operations are of course possible.
     output_mapping: Layout,
+    output_dtype: DataType,
 }
 
 #[derive(Debug)]
@@ -68,13 +80,35 @@ impl MatmulGenerator {
 
         let leafs = find_and_verify_leafs(op_subgraph, matmul_node).ok_or(UnsupportedFusion)?;
 
+        let load_a_dtype = op_subgraph.graph().get(input_a_root).descriptor().data_type;
+        let load_b_dtype = op_subgraph.graph().get(input_b_root).descriptor().data_type;
+        let accumulator_dtype = matmul.precision.accumulator_type();
+
+        let layout_gmem_a =
+            Layout::from_tensor_shape(&op_subgraph.graph().get(input_a_root).descriptor().shape);
+        let layout_gmem_b =
+            Layout::from_tensor_shape(&op_subgraph.graph().get(input_b_root).descriptor().shape);
+
         Ok(Self {
             op_subgraph: op_subgraph.clone(),
+            layout_gmem_a,
+            layout_gmem_b,
             input_a_root,
             input_b_root,
+            matmul_op: matmul.clone(),
+            load_a_dtype,
+            load_b_dtype,
+            accumulator_dtype,
             matmul_node,
             leafs,
         })
+    }
+
+    /// Generates a matmul kernel for the given target architecture.
+    pub fn generate(&self, architecture: Architecture) {
+        sm80::generate_sm80(self, architecture)
+            .compile(architecture)
+            .unwrap();
     }
 }
 
@@ -140,6 +174,7 @@ fn find_and_verify_leafs(op_subgraph: &OpSubgraph, matmul_node: NodeId) -> Optio
             leafs.push(Leaf {
                 node,
                 output_mapping: output_mappings.get(&node).unwrap().clone(),
+                output_dtype: op_subgraph.get(node).descriptor().data_type,
             });
         }
 
@@ -201,19 +236,16 @@ fn is_supported_mainloop_fusion_op(op: &Op) -> bool {
     )
 }
 
-fn is_shape_op(op: &Op) -> bool {
-    matches!(op, Op::SwapDims(_) | Op::Reshape(_))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use helium_ir::{
         data_type::DataType,
         opgraph::{
-            Descriptor,
+            Descriptor, OpGraph,
             op::{Matmul, UnaryPointwise, UnaryPointwiseOp, precision::Precision},
         },
+        shape::Shape,
     };
     use std::sync::Arc;
 

@@ -2,14 +2,14 @@ use crate::cute::{Layout, Mode};
 use std::fmt::{Display, Formatter};
 
 #[derive(Debug, PartialEq, Eq)]
-struct CopyPattern {
-    thread_layout: Layout,
-    value_layout: Layout,
-    vectorization_type: CopyVectorizationType,
+pub struct CopyPattern {
+    pub thread_layout: Layout,
+    pub value_layout: Layout,
+    pub vectorization_type: CopyVectorizationType,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-enum CopyVectorizationType {
+pub enum CopyVectorizationType {
     Uint8,
     Uint16,
     Uint32,
@@ -65,7 +65,7 @@ impl Display for CopyVectorizationType {
 
 /// Finds a copy pattern for a tile in global memory
 /// that aims to maximize load/store coalescing.
-fn find_gmem_copy_pattern(
+pub fn find_gmem_copy_pattern(
     gmem_layout: &Layout,
     tile_layout: &Layout,
     num_threads: u32,
@@ -116,7 +116,6 @@ fn find_gmem_copy_pattern(
 
     let mut threads_stride = 1;
     let mut values_stride = 1;
-    let mut used_threads = 1;
     for (i, mode_index) in order.iter().copied().enumerate() {
         thread_layout[mode_index].stride = threads_stride;
         // For the major dimension, we want to satisfy the following criteria:
@@ -125,21 +124,6 @@ fn find_gmem_copy_pattern(
         // an inefficient narrow load instruction (hardware uses 128-byte coalescing, 4x32 = 128)
         // 2. Each thread should load no more than 16 bytes along that dimension,
         // or else the compiler will generate strided instructions that will kill performance.
-        fn unit_dimension_copy_pattern() {
-            assert_eq!(
-                find_gmem_copy_pattern(
-                    &Layout::new_column_major(&[256, 256]),
-                    &Layout::new_column_major(&[1, 32]),
-                    256,
-                    2
-                ),
-                CopyPattern {
-                    thread_layout: Layout::new_column_major(&[8, 32]),
-                    value_layout: Layout::new_column_major(&[4, 1]),
-                    vectorization_type: CopyVectorizationType::Uint64,
-                }
-            );
-        }
         // For the remaining dimensions, the thread/value count typically does not affect performance
         // except in extreme cases where e.g. the second-major dimension is very small.
         let threads_size = match i {
@@ -177,7 +161,7 @@ fn find_gmem_copy_pattern(
     let vectorization_type =
         CopyVectorizationType::from_byte_size(bytes_per_thread.min(16)).unwrap();
 
-    // If global memory cannot be proven to be aligned to
+    // If global memory or shared memory cannot be proven to be aligned to
     // the vectorization type, then we need to use a narrower
     // vectorization. The proven alignment equals the minimum
     // of the alignments of the strides of the modes except the major mode.
@@ -185,7 +169,14 @@ fn find_gmem_copy_pattern(
     for (i, mode) in gmem_modes.iter().enumerate() {
         if i != order[0] {
             for nested_mode in mode.flatten() {
-                alignment = alignment.min(alignment_of(nested_mode.stride));
+                alignment = alignment.min(alignment_of(nested_mode.stride * bytes_per_element));
+            }
+        }
+    }
+    for (i, mode) in tile_modes.iter().enumerate() {
+        if i != order[0] {
+            for nested_mode in mode.flatten() {
+                alignment = alignment.min(alignment_of(nested_mode.stride * bytes_per_element));
             }
         }
     }
@@ -277,7 +268,7 @@ mod tests {
             CopyPattern {
                 thread_layout: Layout::new_column_major(&[4, 64]),
                 value_layout: Layout::new_column_major(&[8, 1]),
-                vectorization_type: CopyVectorizationType::Uint8,
+                vectorization_type: CopyVectorizationType::Uint16,
             }
         );
     }
@@ -295,6 +286,40 @@ mod tests {
                 thread_layout: Layout::new_column_major(&[8, 32]),
                 value_layout: Layout::new_column_major(&[4, 1]),
                 vectorization_type: CopyVectorizationType::Uint64,
+            }
+        );
+    }
+
+    #[test]
+    fn transposed_smem_layout_inhibits_vectorization() {
+        assert_eq!(
+            find_gmem_copy_pattern(
+                &Layout::new_column_major(&[256, 256]),
+                &Layout::new_row_major(&[128, 64]),
+                256,
+                4
+            ),
+            CopyPattern {
+                thread_layout: Layout::new_column_major(&[32, 8]),
+                value_layout: Layout::new_column_major(&[4, 8]),
+                vectorization_type: CopyVectorizationType::Uint32,
+            }
+        );
+    }
+
+    #[test]
+    fn vectorization_for_k_tile() {
+        assert_eq!(
+            find_gmem_copy_pattern(
+                &Layout::new_row_major(&[256, 256]),
+                &Layout::new_column_major(&[128, 32]),
+                256,
+                2
+            ),
+            CopyPattern {
+                thread_layout: Layout::new_row_major(&[64, 4]),
+                value_layout: Layout::new_row_major(&[2, 8]),
+                vectorization_type: CopyVectorizationType::Uint16,
             }
         );
     }

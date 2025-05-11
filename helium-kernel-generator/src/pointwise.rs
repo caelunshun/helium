@@ -211,14 +211,14 @@ impl PointwiseContext {
 
     /// Recursively emits code to compute up to the given node.
     pub fn emit(&mut self, op_subgraph: &OpSubgraph, node_id: NodeId, dst: &mut Section) -> Symbol {
+        if let Some(symbol) = self.node_values.get(&node_id) {
+            return *symbol;
+        }
+
         for input in op_subgraph.inbound_edges(node_id) {
             if !self.node_values.contains_key(&input) {
                 self.emit(op_subgraph, input, dst);
             }
-        }
-
-        if let Some(symbol) = self.node_values.get(&node_id) {
-            return *symbol;
         }
 
         let Node::Intermediate(Intermediate { op, descriptor }) = op_subgraph.get(node_id) else {

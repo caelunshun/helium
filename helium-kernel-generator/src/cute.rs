@@ -1,6 +1,5 @@
 use helium_ir::shape::Shape;
 use itertools::Either;
-use slotmap::Key;
 use std::{
     fmt::{Debug, Display, Formatter, Write},
     iter::once,
@@ -20,6 +19,7 @@ pub struct Mode {
     pub stride: u32,
 }
 
+#[allow(unused)]
 impl Layout {
     /// Row-major layout from a tensor shape, densely packed,
     /// as standard in `helium`.
@@ -84,6 +84,23 @@ impl Layout {
         ))
     }
 
+    pub fn unwrap_single(&self) -> Mode {
+        let Layout::SingleMode(mode) = self.clone().normalized() else {
+            panic!("called unwrap_single on a multi-mode Layout")
+        };
+        mode
+    }
+
+    pub fn nth_child(&self, n: usize) -> &Layout {
+        match self {
+            Layout::SingleMode(_) => {
+                assert_eq!(n, 0, "layout child index out of bounds");
+                self
+            }
+            Layout::MultiMode(v) => v.get(n).expect("layout child index out of bounds"),
+        }
+    }
+
     /// Removes unnecessary levels of nesting.
     #[must_use]
     pub fn normalized(self) -> Self {
@@ -92,6 +109,14 @@ impl Layout {
             Self::MultiMode(v) => Self::MultiMode(v.into_iter().map(Self::normalized).collect()),
             Self::SingleMode { .. } => self,
         }
+    }
+
+    pub fn cosize(&self) -> u32 {
+        let mut cosize = 0u32;
+        for mode in self.flatten() {
+            cosize += mode.stride * mode.size.saturating_sub(1);
+        }
+        cosize + 1
     }
 
     /// Functional composition of `self` with `other`, such
@@ -135,11 +160,7 @@ impl Layout {
             let q = c.iter().copied().map(|mode| mode.size).product::<u32>();
             assert_eq!(q % s, 0, "size divisibility condition failed");
             let mut d = q / s;
-            for Mode {
-                size: c_size,
-                stride: c_stride,
-            } in c.iter_mut().rev()
-            {
+            for Mode { size: c_size, .. } in c.iter_mut().rev() {
                 if d <= 1 {
                     break;
                 }
@@ -350,5 +371,15 @@ mod tests {
         ))]
     fn composition(#[case] a: Layout, #[case] b: Layout, #[case] c: Layout) {
         assert_eq!(a.compose(&b), c);
+    }
+
+    #[test]
+    fn cosize() {
+        assert_eq!(Layout::new_column_major(&[256, 256]).cosize(), 65_536,);
+        assert_eq!(Layout::new_row_major(&[32, 128]).cosize(), 4096);
+        assert_eq!(
+            Layout::from_sizes_and_strides([(10, 12), (5, 1)]).cosize(),
+            113
+        );
     }
 }

@@ -1,13 +1,14 @@
 use crate::architecture::Architecture;
-use ahash::AHashMap;
 use cudarc::{
     nvrtc,
     nvrtc::{CompileOptions, Ptx},
 };
-use helium_ir::data_type::DataClass;
+use helium_ir::data_type::{DataClass, DataType};
 use std::{
+    cell::{Cell, RefCell},
     fmt::{Display, Formatter},
     io::Cursor,
+    rc::Rc,
     sync::OnceLock,
 };
 use tempfile::TempDir;
@@ -16,8 +17,8 @@ use tempfile::TempDir;
 #[derive(Default)]
 pub struct KernelBuilder {
     name: String,
-    sections: Vec<(String, String)>,
-    symbol_count: u32,
+    sections: Vec<(String, Rc<RefCell<String>>)>,
+    symbol_count: Rc<Cell<u32>>,
 }
 
 impl KernelBuilder {
@@ -29,15 +30,24 @@ impl KernelBuilder {
     }
 
     pub fn new_symbol(&mut self) -> Symbol {
-        let s = self.symbol_count;
-        self.symbol_count = self.symbol_count.checked_add(1).unwrap();
+        let s = self.symbol_count.get();
+        self.symbol_count.set(s.checked_add(1).unwrap());
         Symbol(s)
     }
 
-    pub fn add_section(&mut self, name: impl AsRef<str>) -> &mut Self {
-        self.sections
-            .push((name.as_ref().to_string(), String::new()));
-        self
+    pub fn add_section(&mut self, name: impl AsRef<str>) -> Section {
+        self.sections.push((
+            name.as_ref().to_string(),
+            Rc::new(RefCell::new(String::new())),
+        ));
+        self.section(name.as_ref())
+    }
+
+    pub fn dangling_section(&mut self) -> Section {
+        Section {
+            src: Rc::new(RefCell::new(String::new())),
+            symbol_count: self.symbol_count.clone(),
+        }
     }
 
     pub fn section(&mut self, name: impl AsRef<str>) -> Section {
@@ -47,15 +57,15 @@ impl KernelBuilder {
             .find(|(sec, _)| sec == name.as_ref())
             .expect("missing section");
         Section {
-            s: &mut source.1,
-            symbol_count: &mut self.symbol_count,
+            src: source.1.clone(),
+            symbol_count: self.symbol_count.clone(),
         }
     }
 
-    fn build_source(&self) -> String {
+    pub fn build_source(&self) -> String {
         let mut s = String::new();
         for (_, section) in &self.sections {
-            s.push_str(section);
+            s.push_str(&section.borrow());
             s.push('\n');
         }
         s
@@ -116,20 +126,26 @@ impl BundledHeaders {
     }
 }
 
-pub struct Section<'a> {
-    s: &'a mut String,
-    symbol_count: &'a mut u32,
+pub struct Section {
+    src: Rc<RefCell<String>>,
+    symbol_count: Rc<Cell<u32>>,
 }
 
-impl Section<'_> {
+impl Display for Section {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.src.borrow().as_str().fmt(f)
+    }
+}
+
+impl Section {
     pub fn new_symbol(&mut self) -> Symbol {
-        let s = *self.symbol_count;
-        *self.symbol_count = self.symbol_count.checked_add(1).unwrap();
+        let s = self.symbol_count.get();
+        self.symbol_count.set(s.checked_add(1).unwrap());
         Symbol(s)
     }
 
     pub fn emit(&mut self, source: impl AsRef<str>) -> &mut Self {
-        self.s.push_str(source.as_ref());
+        self.src.borrow_mut().push_str(source.as_ref());
         self
     }
 }
@@ -149,6 +165,37 @@ pub fn cpp_data_class(data_class: DataClass) -> &'static str {
         DataClass::Float => "float",
         DataClass::Int => "uint32_t",
         DataClass::Bool => "bool",
+    }
+}
+
+pub fn cpp_data_type(data_type: DataType) -> &'static str {
+    match data_type {
+        DataType::F16 => "half_t",
+        DataType::Bf16 => "bfloat16_t",
+        DataType::F32 => "float",
+        DataType::U32 => "uint32_t",
+        DataType::Bool => "bool",
+    }
+}
+
+pub fn cpp_sizeof(data_type: DataType) -> u32 {
+    match data_type {
+        DataType::F16 => 2,
+        DataType::Bf16 => 2,
+        DataType::F32 => 4,
+        DataType::U32 => 4,
+        DataType::Bool => 1,
+    }
+}
+
+pub fn cpp_raw_byte_type(bytes: u32) -> &'static str {
+    match bytes {
+        1 => "uint8_t",
+        2 => "uint16_t",
+        4 => "uint32_t",
+        8 => "uint64_t",
+        16 => "uint128_t",
+        _ => panic!("unsupported raw byte type for {bytes} bytes"),
     }
 }
 
