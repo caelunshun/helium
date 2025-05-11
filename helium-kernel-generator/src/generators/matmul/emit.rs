@@ -88,8 +88,8 @@ fn find_gmem_copy_pattern(
     );
 
     assert!(
-        tile_modes.iter().all(|mode| mode.size() % 32 == 0),
-        "tile dimensions must be multiples of 32"
+        tile_modes.iter().all(|mode| mode.size().is_power_of_two()),
+        "tile dimensions must be powers of two (for now)"
     );
 
     assert!(bytes_per_element.is_power_of_two());
@@ -118,12 +118,36 @@ fn find_gmem_copy_pattern(
 
     let mut threads_stride = 1;
     let mut values_stride = 1;
+    let mut used_threads = 1;
     for (i, mode_index) in order.iter().copied().enumerate() {
         thread_layout[mode_index].stride = threads_stride;
+        // For the major dimension, we want to satisfy the following criteria:
+        // 1. Each thread should load at least 4 bytes if possible, so that we
+        // can vectorize to at least uint32_t - otherwise, we would be using
+        // an inefficient narrow load instruction (hardware uses 128-byte coalescing, 4x32 = 128)
+        // 2. Each thread should load no more than 16 bytes along that dimension,
+        // or else the compiler will generate strided instructions that will kill performance.
+        // For the remaining dimensions, the thread/value count typically does not affect performance
+        // except in extreme cases where e.g. the second-major dimension is very small.
         let threads_size = match i {
-            0 => 32,
-            1 => num_threads / 32,
-            _ => 1,
+            // major dimension
+            0 => {
+                let major_bytes = tile_modes[mode_index].size() * bytes_per_element;
+                let mut threads = (major_bytes / 16).min(num_threads); // 16 == max vectorization size, sizeof(uint128_t)
+                // edge case: if there would be too many remaining threads
+                // to fill the rest of the dimensions, then we have to increase
+                // the count (meaning worse vectorization)
+                let remaining_dimensions = order[1..]
+                    .iter()
+                    .map(|&i| tile_modes[i].size())
+                    .product::<u32>();
+                if num_threads / threads > remaining_dimensions {
+                    threads *= (num_threads / threads) / remaining_dimensions;
+                }
+                threads
+            }
+            // remaining dimensions
+            _ => (num_threads / threads_stride).max(1),
         };
         thread_layout[mode_index].size = threads_size;
         threads_stride *= threads_size;
@@ -204,15 +228,15 @@ mod tests {
                 4
             ),
             CopyPattern {
-                thread_layout: Layout::new_row_major(&[8, 32]),
-                value_layout: Layout::new_row_major(&[16, 2]),
-                vectorization_type: CopyVectorizationType::Uint64,
+                thread_layout: Layout::new_row_major(&[16, 16]),
+                value_layout: Layout::new_row_major(&[8, 4]),
+                vectorization_type: CopyVectorizationType::Uint128,
             }
         );
     }
 
     #[test]
-    fn limited_vectorization_copy_pattern() {
+    fn narrow_dimension_copy_pattern() {
         assert_eq!(
             find_gmem_copy_pattern(
                 &Layout::new_column_major(&[256, 256]),
@@ -221,15 +245,15 @@ mod tests {
                 2
             ),
             CopyPattern {
-                thread_layout: Layout::new_column_major(&[32, 8]),
-                value_layout: Layout::new_column_major(&[1, 8]),
-                vectorization_type: CopyVectorizationType::Uint16,
+                thread_layout: Layout::new_column_major(&[4, 64]),
+                value_layout: Layout::new_column_major(&[8, 1]),
+                vectorization_type: CopyVectorizationType::Uint128,
             }
         );
     }
 
     #[test]
-    fn misalignment_inhibits_vectorization() {
+    fn misalignment_inhibits_copy_vectorization() {
         assert_eq!(
             find_gmem_copy_pattern(
                 &Layout::new_column_major(&[257, 256]),
@@ -238,9 +262,26 @@ mod tests {
                 2
             ),
             CopyPattern {
-                thread_layout: Layout::new_column_major(&[32, 8]),
-                value_layout: Layout::new_column_major(&[1, 8]),
+                thread_layout: Layout::new_column_major(&[4, 64]),
+                value_layout: Layout::new_column_major(&[8, 1]),
                 vectorization_type: CopyVectorizationType::Uint8,
+            }
+        );
+    }
+
+    #[test]
+    fn very_narrow_dimension_copy_pattern() {
+        assert_eq!(
+            find_gmem_copy_pattern(
+                &Layout::new_column_major(&[256, 256]),
+                &Layout::new_column_major(&[32, 32]),
+                256,
+                2
+            ),
+            CopyPattern {
+                thread_layout: Layout::new_column_major(&[8, 32]),
+                value_layout: Layout::new_column_major(&[4, 1]),
+                vectorization_type: CopyVectorizationType::Uint64,
             }
         );
     }
