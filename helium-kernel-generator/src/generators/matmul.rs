@@ -19,6 +19,8 @@ use helium_ir::{
     shape::Shape,
 };
 
+mod emit;
+
 /// Generator for a valid matmul fusion.
 #[derive(Debug)]
 pub struct MatmulGenerator {
@@ -131,35 +133,37 @@ fn find_and_verify_leafs(op_subgraph: &OpSubgraph, matmul_node: NodeId) -> Optio
     let mut output_mappings = AHashMap::new();
     output_mappings.insert(matmul_node, Layout::from_tensor_shape(matmul_output_shape));
 
+    visited.extend(stack.iter().copied());
+
     while let Some(node) = stack.pop() {
         if op_subgraph.is_leaf(node) {
             leafs.push(Leaf {
                 node,
                 output_mapping: output_mappings.get(&node).unwrap().clone(),
             });
-        } else {
-            for next in op_subgraph.outbound_edges(node) {
-                if op_subgraph
-                    .inbound_edges(next)
-                    .all(|dep| visited.contains(&dep))
-                    && visited.insert(next)
-                {
-                    let Node::Intermediate(Intermediate { op, .. }) = op_subgraph.get(next) else {
-                        unreachable!()
-                    };
+        }
 
-                    if !is_supported_epilogue_fusion_op(op) {
-                        return None;
-                    }
+        for next in op_subgraph.outbound_edges(node) {
+            if op_subgraph
+                .inbound_edges(next)
+                .all(|dep| visited.contains(&dep))
+                && visited.insert(next)
+            {
+                let Node::Intermediate(Intermediate { op, .. }) = op_subgraph.get(next) else {
+                    unreachable!()
+                };
 
-                    let new_output_mapping = match op {
-                        Op::Reshape(_) | Op::SwapDims(_) => todo!(),
-                        _ => output_mappings.get(&node).unwrap().clone(),
-                    };
-
-                    stack.push(next);
-                    output_mappings.insert(next, new_output_mapping);
+                if !is_supported_epilogue_fusion_op(op) {
+                    return None;
                 }
+
+                let new_output_mapping = match op {
+                    Op::Reshape(_) | Op::SwapDims(_) => todo!(),
+                    _ => output_mappings.get(&node).unwrap().clone(),
+                };
+
+                stack.push(next);
+                output_mappings.insert(next, new_output_mapping);
             }
         }
     }
@@ -208,7 +212,7 @@ mod tests {
         data_type::DataType,
         opgraph::{
             Descriptor,
-            op::{Matmul, precision::Precision},
+            op::{Matmul, UnaryPointwise, UnaryPointwiseOp, precision::Precision},
         },
     };
     use std::sync::Arc;
@@ -227,8 +231,35 @@ mod tests {
         }));
         graph.new_output(matmul);
 
-        dbg!(
-            MatmulGenerator::new(&OpSubgraph::from_nodes(&Arc::new(graph), vec![matmul])).unwrap()
-        );
+        let generator =
+            MatmulGenerator::new(&OpSubgraph::from_nodes(&Arc::new(graph), vec![matmul])).unwrap();
+        assert_eq!(generator.leafs.len(), 1);
+    }
+
+    #[test]
+    fn multi_leaf_kernel_is_valid() {
+        let mut graph = OpGraph::new();
+        let input = graph.new_input(Descriptor {
+            shape: Shape::new([8, 8]),
+            data_type: DataType::F32,
+        });
+        let matmul = graph.new_op(Op::Matmul(Matmul {
+            input_a: input,
+            input_b: input,
+            precision: Precision::MulBf16AccumF32,
+        }));
+        graph.new_output(matmul);
+        let pointwise = graph.new_op(Op::UnaryPointwise(UnaryPointwise {
+            op: UnaryPointwiseOp::Exp,
+            input: matmul,
+        }));
+        graph.new_output(pointwise);
+
+        let generator = MatmulGenerator::new(&OpSubgraph::from_nodes(
+            &Arc::new(graph),
+            vec![matmul, pointwise],
+        ))
+        .unwrap();
+        assert_eq!(generator.leafs.len(), 2);
     }
 }

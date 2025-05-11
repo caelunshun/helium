@@ -1,13 +1,23 @@
 use helium_ir::shape::Shape;
+use itertools::Either;
 use slotmap::Key;
-use std::fmt::{Debug, Display, Formatter, Write};
+use std::{
+    fmt::{Debug, Display, Formatter, Write},
+    iter::once,
+};
 
 /// Rust runtime representation mirroring `cute::Layout`
 /// from CUTLASS.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Layout {
-    SingleMode { size: u32, stride: u32 },
+    SingleMode(Mode),
     MultiMode(Vec<Layout>),
+}
+
+#[derive(Default, Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Mode {
+    pub size: u32,
+    pub stride: u32,
 }
 
 impl Layout {
@@ -28,9 +38,11 @@ impl Layout {
                 .iter()
                 .copied()
                 .zip(strides)
-                .map(|(size, stride)| Layout::SingleMode {
-                    size: size.try_into().unwrap(),
-                    stride: stride.try_into().unwrap(),
+                .map(|(size, stride)| {
+                    Layout::SingleMode(Mode {
+                        size: size.try_into().unwrap(),
+                        stride: stride.try_into().unwrap(),
+                    })
                 })
                 .collect(),
         )
@@ -40,7 +52,7 @@ impl Layout {
         Self::MultiMode(
             sizes_strides
                 .into_iter()
-                .map(|(size, stride)| Layout::SingleMode { size, stride })
+                .map(|(size, stride)| Layout::SingleMode(Mode { size, stride }))
                 .collect(),
         )
         .normalized()
@@ -53,13 +65,23 @@ impl Layout {
                 .iter()
                 .copied()
                 .map(|size| {
-                    let mode = Layout::SingleMode { stride, size };
+                    let mode = Layout::SingleMode(Mode { stride, size });
                     stride *= size;
                     mode
                 })
                 .collect(),
         )
         .normalized()
+    }
+
+    pub fn new_row_major(sizes: &[u32]) -> Self {
+        Self::from_tensor_shape(&Shape::new(
+            sizes
+                .iter()
+                .copied()
+                .map(|x| x as usize)
+                .collect::<Vec<_>>(),
+        ))
     }
 
     /// Removes unnecessary levels of nesting.
@@ -83,11 +105,19 @@ impl Layout {
 
         let mut output_modes = Vec::new();
 
-        for &(b_size, b_stride) in &b {
+        for &Mode {
+            size: b_size,
+            stride: b_stride,
+        } in &b
+        {
             let mut c = a.clone();
             // "remove" first b_stride elements in `c` by dividing them out
             let mut d = b_stride;
-            for (c_size, c_stride) in &mut c {
+            for Mode {
+                size: c_size,
+                stride: c_stride,
+            } in &mut c
+            {
                 if d <= 1 {
                     break;
                 }
@@ -102,10 +132,14 @@ impl Layout {
 
             // "keep" first b_size elements in `c` by modding them out
             let s = b_size;
-            let q = c.iter().copied().map(|(size, _)| size).product::<u32>();
+            let q = c.iter().copied().map(|mode| mode.size).product::<u32>();
             assert_eq!(q % s, 0, "size divisibility condition failed");
             let mut d = q / s;
-            for (c_size, c_stride) in c.iter_mut().rev() {
+            for Mode {
+                size: c_size,
+                stride: c_stride,
+            } in c.iter_mut().rev()
+            {
                 if d <= 1 {
                     break;
                 }
@@ -118,12 +152,7 @@ impl Layout {
             assert_eq!(d, 1, "size divisibility condition failed");
 
             output_modes.push(
-                Layout::MultiMode(
-                    c.into_iter()
-                        .map(|(size, stride)| Layout::SingleMode { size, stride })
-                        .collect(),
-                )
-                .coalesce(),
+                Layout::MultiMode(c.into_iter().map(Layout::SingleMode).collect()).coalesce(),
             );
         }
 
@@ -135,7 +164,7 @@ impl Layout {
     pub fn cute_type(&self) -> String {
         fn build_shape(s: &mut String, layout: &Layout) {
             match layout {
-                Layout::SingleMode { size, .. } => {
+                Layout::SingleMode(Mode { size, .. }) => {
                     write!(s, "Int<{size}>").unwrap();
                 }
                 Layout::MultiMode(v) => {
@@ -153,7 +182,7 @@ impl Layout {
 
         fn build_stride(s: &mut String, layout: &Layout) {
             match layout {
-                Layout::SingleMode { stride, .. } => {
+                Layout::SingleMode(Mode { stride, .. }) => {
                     write!(s, "Int<{stride}>").unwrap();
                 }
                 Layout::MultiMode(v) => {
@@ -178,10 +207,17 @@ impl Layout {
         s
     }
 
-    fn flatten(&self) -> Vec<(u32, u32)> {
-        fn flatten_into(l: &Layout, v: &mut Vec<(u32, u32)>) {
+    pub fn nested(&self) -> impl Iterator<Item = &Layout> {
+        match self {
+            Layout::SingleMode { .. } => Either::Left(once(self)),
+            Layout::MultiMode(modes) => Either::Right(modes.iter()),
+        }
+    }
+
+    pub fn flatten(&self) -> Vec<Mode> {
+        fn flatten_into(l: &Layout, v: &mut Vec<Mode>) {
             match l {
-                Layout::SingleMode { size, stride } => v.push((*size, *stride)),
+                Layout::SingleMode(mode) => v.push(*mode),
                 Layout::MultiMode(ls) => {
                     for l in ls {
                         flatten_into(l, v)
@@ -200,8 +236,14 @@ impl Layout {
             let mut did_coalesce = false;
 
             for i in 0..flattened.len() - 1 {
-                let (size_a, stride_a) = flattened[i];
-                let (size_b, stride_b) = flattened[i + 1];
+                let Mode {
+                    size: size_a,
+                    stride: stride_a,
+                } = flattened[i];
+                let Mode {
+                    size: size_b,
+                    stride: stride_b,
+                } = flattened[i + 1];
 
                 if size_a == 1 {
                     // ignore modes with size 1
@@ -211,7 +253,10 @@ impl Layout {
                     flattened.remove(i + 1);
                 } else if stride_b == stride_a * size_a {
                     flattened.remove(i);
-                    flattened[i] = (size_a * size_b, stride_a);
+                    flattened[i] = Mode {
+                        size: size_a * size_b,
+                        stride: stride_a,
+                    };
                 } else {
                     continue;
                 }
@@ -224,18 +269,12 @@ impl Layout {
                 break;
             }
         }
-        Self::MultiMode(
-            flattened
-                .into_iter()
-                .map(|(size, stride)| Self::SingleMode { size, stride })
-                .collect(),
-        )
-        .normalized()
+        Self::MultiMode(flattened.into_iter().map(Self::SingleMode).collect()).normalized()
     }
 
     pub fn size(&self) -> u32 {
         match self {
-            Layout::SingleMode { size, .. } => *size,
+            Layout::SingleMode(Mode { size, .. }) => *size,
             Layout::MultiMode(v) => v.iter().map(Layout::size).product(),
         }
     }
@@ -280,13 +319,13 @@ mod tests {
     fn nested_layout_to_cute_type() {
         let layout = Layout::MultiMode(vec![
             Layout::MultiMode(vec![
-                Layout::SingleMode { size: 4, stride: 1 },
-                Layout::SingleMode { size: 8, stride: 4 },
+                Layout::SingleMode(Mode { size: 4, stride: 1 }),
+                Layout::SingleMode(Mode { size: 8, stride: 4 }),
             ]),
-            Layout::SingleMode {
+            Layout::SingleMode(Mode {
                 size: 16,
                 stride: 32,
-            },
+            }),
         ]);
         assert_eq!(
             layout.cute_type(),

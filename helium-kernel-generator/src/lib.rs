@@ -5,5 +5,6 @@ mod builder;
 mod cute;
 pub mod error;
 pub mod generators;
+mod pointwise;
 
 pub use error::Error;

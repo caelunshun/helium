@@ -4,7 +4,12 @@ use cudarc::{
     nvrtc,
     nvrtc::{CompileOptions, Ptx},
 };
-use std::{io::Cursor, sync::OnceLock};
+use helium_ir::data_type::DataClass;
+use std::{
+    fmt::{Display, Formatter},
+    io::Cursor,
+    sync::OnceLock,
+};
 use tempfile::TempDir;
 
 /// Utility to build a kernel.
@@ -12,6 +17,7 @@ use tempfile::TempDir;
 pub struct KernelBuilder {
     name: String,
     sections: Vec<(String, String)>,
+    symbol_count: u32,
 }
 
 impl KernelBuilder {
@@ -20,6 +26,12 @@ impl KernelBuilder {
             name: name.into(),
             ..Default::default()
         }
+    }
+
+    pub fn new_symbol(&mut self) -> Symbol {
+        let s = self.symbol_count;
+        self.symbol_count = self.symbol_count.checked_add(1).unwrap();
+        Symbol(s)
     }
 
     pub fn add_section(&mut self, name: impl AsRef<str>) -> &mut Self {
@@ -34,7 +46,10 @@ impl KernelBuilder {
             .iter_mut()
             .find(|(sec, _)| sec == name.as_ref())
             .expect("missing section");
-        Section { s: &mut source.1 }
+        Section {
+            s: &mut source.1,
+            symbol_count: &mut self.symbol_count,
+        }
     }
 
     fn build_source(&self) -> String {
@@ -103,12 +118,37 @@ impl BundledHeaders {
 
 pub struct Section<'a> {
     s: &'a mut String,
+    symbol_count: &'a mut u32,
 }
 
 impl Section<'_> {
-    pub fn add(&mut self, source: impl AsRef<str>) -> &mut Self {
+    pub fn new_symbol(&mut self) -> Symbol {
+        let s = *self.symbol_count;
+        *self.symbol_count = self.symbol_count.checked_add(1).unwrap();
+        Symbol(s)
+    }
+
+    pub fn emit(&mut self, source: impl AsRef<str>) -> &mut Self {
         self.s.push_str(source.as_ref());
         self
+    }
+}
+
+/// A unique identifier within a kernel.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Symbol(u32);
+
+impl Display for Symbol {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "local{}", self.0)
+    }
+}
+
+pub fn cpp_data_class(data_class: DataClass) -> &'static str {
+    match data_class {
+        DataClass::Float => "float",
+        DataClass::Int => "uint32_t",
+        DataClass::Bool => "bool",
     }
 }
 
@@ -128,7 +168,7 @@ mod tests {
 
         let mut kernel = KernelBuilder::new("trivial_kernel");
         kernel.add_section("main");
-        kernel.section("main").add(source);
+        kernel.section("main").emit(source);
         kernel.compile(Architecture::Sm120a).unwrap();
     }
 }

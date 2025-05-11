@@ -236,13 +236,18 @@ struct Matmul {
 
     copy(_tiled_copy_s2r_a, thr_smem_a, _thr_copy_s2r_a().retile_D(thr_reg_a));
     copy(_tiled_copy_s2r_b, thr_smem_b, _thr_copy_s2r_b().retile_D(thr_reg_b));
+    
+    auto thr_reg_a_converted = make_tensor<GemmDtypeA>(thr_reg_a.layout());
+    auto thr_reg_b_converted = make_tensor<GemmDtypeB>(thr_reg_b.layout());
+    transform(thr_reg_a, thr_reg_a_converted, [](InDtypeA x) { return static_cast<GemmDtypeA>(x); });
+    transform(thr_reg_b, thr_reg_b_converted, [](InDtypeB x) { return static_cast<GemmDtypeB>(x); });
 
     // Apply mainloop fusions in registers
-    _mainloop_fusion.apply_thr_a(thr_reg_a);
-    _mainloop_fusion.apply_thr_b(thr_reg_b);
+    _mainloop_fusion.apply_thr_a(thr_reg_a_converted);
+    _mainloop_fusion.apply_thr_b(thr_reg_b_converted);
 
     // MMA
-    gemm(_tiled_mma, thr_reg_a, thr_reg_b, thr_reg_c);
+    gemm(_tiled_mma, thr_reg_a_converted, thr_reg_b_converted, thr_reg_c);
   }
 
   __device__ void run() {
