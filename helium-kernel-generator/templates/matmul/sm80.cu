@@ -61,7 +61,7 @@ template <typename InDtypeA, typename InDtypeB, typename GemmDtypeA,
           typename Epilogue, typename TileSize, typename LayoutSmemA,
           typename LayoutSmemB, typename LayoutSmemC, typename TiledCopyG2S_A,
           typename TiledCopyG2S_B, typename TiledCopyS2R_A,
-          typename TiledCopyS2R_B, typename TiledMma, uint32_t PIPELINE>
+          typename TiledCopyS2R_B, typename TiledMma, uint32_t PIPELINE, bool SpecializedCopyA, bool SpecializedCopyB>
 struct Matmul {
   LayoutGmemA _layout_gmem_a;
   LayoutGmemB _layout_gmem_b;
@@ -195,7 +195,7 @@ struct Matmul {
         thr_pred(i) = get<0>(coord) < size<0>(_layout_gmem_b) &&
                       get<1>(coord) < size<1>(_layout_gmem_b);
         if (!thr_pred(i)) {
-          thr_smem_b(i) = static_cast<InDtypeA>(0.0f);
+          thr_smem_b(i) = static_cast<InDtypeB>(0.0f);
         }
       }
 
@@ -214,20 +214,28 @@ struct Matmul {
     // Load data into registers for MMA
     auto thr_reg_a = _thr_mma().partition_fragment_A(smem_a);
     auto thr_reg_b = _thr_mma().partition_fragment_B(smem_b);
-    auto thr_smem_a = _thr_copy_s2r_a().partition_S(smem_a);
-    auto thr_smem_b = _thr_copy_s2r_b().partition_S(smem_b);
 
-    copy(_tiled_copy_s2r_a, thr_smem_a, _thr_copy_s2r_a().retile_D(thr_reg_a));
-    copy(_tiled_copy_s2r_b, thr_smem_b, _thr_copy_s2r_b().retile_D(thr_reg_b));
+    if constexpr(SpecializedCopyA) {
+        auto thr_smem_a = _thr_copy_s2r_a().partition_S(smem_a);
+        copy(_tiled_copy_s2r_a, thr_smem_a, _thr_copy_s2r_a().retile_D(thr_reg_a));
+    } else {
+        copy(_thr_mma().partition_A(smem_a), thr_reg_a);
+    }
+    if constexpr(SpecializedCopyB) {
+        auto thr_smem_b = _thr_copy_s2r_b().partition_S(smem_b);
+        copy(_tiled_copy_s2r_b, thr_smem_b, _thr_copy_s2r_b().retile_D(thr_reg_b));
+    } else {
+        copy(_thr_mma().partition_B(smem_b), thr_reg_b);
+    }
+
+    // Apply mainloop fusions in registers
+    _mainloop_fusion.apply_thr_a(thr_reg_a);
+    _mainloop_fusion.apply_thr_b(thr_reg_b);
     
     auto thr_reg_a_converted = make_tensor<GemmDtypeA>(thr_reg_a.layout());
     auto thr_reg_b_converted = make_tensor<GemmDtypeB>(thr_reg_b.layout());
-    transform(thr_reg_a, thr_reg_a_converted, [](InDtypeA x) { return static_cast<GemmDtypeA>(x); });
-    transform(thr_reg_b, thr_reg_b_converted, [](InDtypeB x) { return static_cast<GemmDtypeB>(x); });
-
-    // Apply mainloop fusions in registers
-    _mainloop_fusion.apply_thr_a(thr_reg_a_converted);
-    _mainloop_fusion.apply_thr_b(thr_reg_b_converted);
+    transform(thr_reg_a, thr_reg_a_converted, [](auto x) { return static_cast<GemmDtypeA>(x); });
+    transform(thr_reg_b, thr_reg_b_converted, [](auto x) { return static_cast<GemmDtypeB>(x); });
 
     // MMA
     gemm(_tiled_mma, thr_reg_a_converted, thr_reg_b_converted, thr_reg_c);

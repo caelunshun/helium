@@ -25,8 +25,9 @@ pub struct PointwiseContext {
 impl PointwiseContext {
     /// Indicates that the output value of the given node
     /// is already stored in the given symbol.
-    pub fn insert(&mut self, node: NodeId, symbol: Symbol) {
+    pub fn insert(&mut self, node: NodeId, symbol: Symbol, data_class: DataClass) {
         self.node_values.insert(node, symbol);
+        self.node_data_classes.insert(node, data_class);
     }
 
     /// Gets the symbol name of the given node's output.

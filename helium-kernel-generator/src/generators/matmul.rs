@@ -12,8 +12,16 @@
 //! scalar alpha and beta values and an accumulator matrix. Those extra operations are more
 //! elegantly expressed as optional mainloop (for alpha/beta) and epilogue (for accumulator matrix) fusions.
 
-use crate::{architecture::Architecture, cute::Layout};
+use crate::{Error, architecture::Architecture, cute::Layout};
 use ahash::{AHashMap, AHashSet};
+use bumpalo::Bump;
+use cudarc::{
+    driver::{
+        CudaContext, CudaModule, CudaStream, LaunchConfig, PushKernelArg,
+        sys::{CUdeviceptr, CUfunc_cache_enum, CUfunction_attribute_enum},
+    },
+    nvrtc::Ptx,
+};
 use helium_ir::{
     data_type::DataType,
     opgraph::{
@@ -22,6 +30,7 @@ use helium_ir::{
         subgraph::OpSubgraph,
     },
 };
+use std::sync::Arc;
 
 mod copy_synthesis;
 mod sm80;
@@ -43,7 +52,7 @@ pub struct MatmulGenerator {
 }
 
 /// An output tensor written to memory.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Leaf {
     /// Output node in the `OpGraph` that corresponds to the leaf.
     node: NodeId,
@@ -88,6 +97,9 @@ impl MatmulGenerator {
             Layout::from_tensor_shape(&op_subgraph.graph().get(input_a_root).descriptor().shape);
         let layout_gmem_b =
             Layout::from_tensor_shape(&op_subgraph.graph().get(input_b_root).descriptor().shape);
+        // cute reverses the order of coordinates for the B matrix
+        // so that the K dimension comes last.
+        let layout_gmem_b = layout_gmem_b.with_children_swapped(0, 1);
 
         Ok(Self {
             op_subgraph: op_subgraph.clone(),
@@ -105,10 +117,88 @@ impl MatmulGenerator {
     }
 
     /// Generates a matmul kernel for the given target architecture.
-    pub fn generate(&self, architecture: Architecture) {
-        sm80::generate_sm80(self, architecture)
-            .compile(architecture)
-            .unwrap();
+    pub fn generate(&self, architecture: Architecture) -> Result<CompiledKernel, Error> {
+        let (kernel, tile_layout) = sm80::generate_sm80(self, architecture);
+        let dynamic_smem_bytes = kernel.dynamic_smem_bytes();
+
+        let m = self.layout_gmem_a.nth_child(0).size();
+        let n = self.layout_gmem_b.nth_child(0).size();
+
+        kernel.compile(architecture).map(|ptx| CompiledKernel {
+            ptx,
+            dynamic_smem_bytes,
+            tile_size_m: tile_layout.m(),
+            tile_size_n: tile_layout.n(),
+            m,
+            n,
+            leafs: self.leafs.clone(),
+        })
+    }
+}
+
+pub struct CompiledKernel {
+    ptx: Ptx,
+    dynamic_smem_bytes: u32,
+    tile_size_m: u32,
+    tile_size_n: u32,
+    m: u32,
+    n: u32,
+    leafs: Vec<Leaf>,
+}
+
+impl CompiledKernel {
+    pub fn ptx(&self) -> &Ptx {
+        &self.ptx
+    }
+
+    pub fn load_on_device(&self, device: &Arc<CudaContext>) -> Result<Arc<CudaModule>, Error> {
+        device.load_module(self.ptx.clone()).map_err(From::from)
+    }
+
+    /// Executes a compiled kernel using the "safe" `cudarc` API.
+    ///
+    /// # Safety
+    /// Does not check for validity of all layouts, so this is `unsafe`.
+    /// The inputs must exactly match the operation graph this kernel
+    /// was built with or else the behavior is undefined.
+    pub unsafe fn execute<'a>(
+        &self,
+        module: &Arc<CudaModule>,
+        stream: &Arc<CudaStream>,
+        a: CUdeviceptr,
+        b: CUdeviceptr,
+        get_output_slice: impl Fn(NodeId) -> CUdeviceptr,
+    ) -> Result<(), Error> {
+        let kernel = module.load_function("matmul")?;
+        kernel.set_function_cache_config(CUfunc_cache_enum::CU_FUNC_CACHE_PREFER_SHARED)?;
+        kernel.set_attribute(
+            CUfunction_attribute_enum::CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
+            self.dynamic_smem_bytes as _,
+        )?;
+
+        let bump = Bump::new();
+
+        unsafe {
+            let mut builder = stream.launch_builder(&kernel);
+
+            builder.arg(&a).arg(&b);
+
+            for leaf in &self.leafs {
+                builder.arg(bump.alloc(get_output_slice(leaf.node)) as &CUdeviceptr);
+            }
+
+            builder.launch(LaunchConfig {
+                grid_dim: (
+                    self.m.div_ceil(self.tile_size_m),
+                    self.n.div_ceil(self.tile_size_n),
+                    1,
+                ),
+                block_dim: (256, 1, 1),
+                shared_mem_bytes: self.dynamic_smem_bytes,
+            })?;
+        }
+
+        Ok(())
     }
 }
 

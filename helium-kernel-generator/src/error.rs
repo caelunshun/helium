@@ -6,4 +6,6 @@ pub enum Error {
     Io(#[from] io::Error),
     #[error(transparent)]
     Nvrtc(#[from] cudarc::nvrtc::CompileError),
+    #[error(transparent)]
+    Cuda(#[from] cudarc::driver::DriverError),
 }

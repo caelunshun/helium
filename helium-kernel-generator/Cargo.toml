@@ -14,6 +14,7 @@ tempfile = "3"
 thiserror = "2"
 zstd = "0.13"
 itertools = "0.14"
+bumpalo = "3"
 
 fd-lock = { version = "4", optional = true }
 blake3 = { version = "1", optional = true }
@@ -22,6 +23,11 @@ directories = { version = "6", optional = true }
 
 [dev-dependencies]
 rstest = "0.25"
+faer = "0.22"
+approx = "0.5"
+bytemuck = "1"
+half = "2"
+rand = "0.9"
 
 [build-dependencies]
 tar = "0.4"
@@ -30,7 +36,7 @@ zstd = "0.13"
 [dependencies.cudarc]
 version = "0.16.4"
 default-features = false
-features = ["cuda-version-from-build-system", "std", "dynamic-linking", "nvrtc"]
+features = ["cuda-version-from-build-system", "std", "dynamic-linking", "nvrtc", "driver", "f16"]
 
 [features]
 default = ["disk-cache"]

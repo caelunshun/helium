@@ -101,6 +101,21 @@ impl Layout {
         }
     }
 
+    #[must_use]
+    pub fn with_children_swapped(mut self, a: usize, b: usize) -> Self {
+        match self {
+            Layout::SingleMode(_) => {
+                assert_eq!(a, 0);
+                assert_eq!(b, 0);
+                self
+            }
+            Layout::MultiMode(mut v) => {
+                v.swap(a, b);
+                Layout::MultiMode(v)
+            }
+        }
+    }
+
     /// Removes unnecessary levels of nesting.
     #[must_use]
     pub fn normalized(self) -> Self {

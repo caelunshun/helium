@@ -9,7 +9,7 @@ use std::{
     fmt::{Display, Formatter},
     io::Cursor,
     rc::Rc,
-    sync::OnceLock,
+    sync::{Once, OnceLock},
 };
 use tempfile::TempDir;
 
@@ -19,6 +19,7 @@ pub struct KernelBuilder {
     name: String,
     sections: Vec<(String, Rc<RefCell<String>>)>,
     symbol_count: Rc<Cell<u32>>,
+    dynamic_smem_amount: u32,
 }
 
 impl KernelBuilder {
@@ -27,6 +28,14 @@ impl KernelBuilder {
             name: name.into(),
             ..Default::default()
         }
+    }
+
+    pub fn add_dynamic_smem(&mut self, bytes: u32) {
+        self.dynamic_smem_amount += bytes;
+    }
+
+    pub fn dynamic_smem_bytes(&self) -> u32 {
+        self.dynamic_smem_amount
     }
 
     pub fn new_symbol(&mut self) -> Symbol {
@@ -75,6 +84,13 @@ impl KernelBuilder {
         let source = self.build_source();
         let bundled_headers = BundledHeaders::get()?;
 
+        //std::fs::write("out.cu", source.as_bytes()).unwrap();
+
+        static SET_HEAP_SIZE: Once = Once::new();
+        SET_HEAP_SIZE.call_once(|| unsafe {
+            nvrtc::sys::nvrtcSetPCHHeapSize(1024 * 1024 * 1024);
+        });
+
         nvrtc::compile_ptx_with_opts(
             &source,
             CompileOptions {
@@ -88,10 +104,15 @@ impl KernelBuilder {
                     "-dopt=on".into(),
                     "-G".into(),
                     "-default-device".into(),
+                    "--std=c++20".into(),
                 ],
                 use_fast_math: None,
                 maxrregcount: None,
-                include_paths: vec![bundled_headers.dir.path().to_str().unwrap().to_string()],
+                include_paths: vec![
+                    bundled_headers.dir.path().to_str().unwrap().to_string(),
+                    "/usr/include".into(),
+                    "/usr/local/include".into(),
+                ],
                 arch: None,
                 name: Some(self.name.clone()),
             },

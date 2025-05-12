@@ -9,11 +9,14 @@ use crate::{
     pointwise::PointwiseContext,
 };
 use helium_ir::{
-    data_type::DataType,
+    data_type::{DataClass, DataType},
     opgraph::op::precision::{F8Mode, Precision},
 };
 use indoc::formatdoc;
-use std::cmp::Ordering;
+use std::{
+    cmp::Ordering,
+    fmt::{Display, Formatter},
+};
 
 const NUM_THREADS: u32 = 256;
 const PIPELINE: u32 = 2;
@@ -27,18 +30,23 @@ struct Sm80MatmulGenerator<'a> {
 
 /// Generates a fused matmul kernel that uses up to SM80 (Ampere) features
 /// and a shared memory limit corresponding to `actual_architecture`.
-pub fn generate_sm80(matmul: &MatmulGenerator, actual_architecture: Architecture) -> KernelBuilder {
+pub fn generate_sm80(
+    matmul: &MatmulGenerator,
+    actual_architecture: Architecture,
+) -> (KernelBuilder, TileLayout) {
+    let (tile_layout, needed_smem) = find_tile_layout(matmul, actual_architecture);
     let mut generator = Sm80MatmulGenerator {
         matmul,
         builder: KernelBuilder::new("matmul_sm80"),
-        tile_layout: find_tile_layout(matmul, actual_architecture),
+        tile_layout,
     };
     generator.emit();
-    generator.builder
+    generator.builder.add_dynamic_smem(needed_smem);
+    (generator.builder, generator.tile_layout)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct TileLayout {
+pub struct TileLayout {
     a: Layout,
     b: Layout,
     c: Layout,
@@ -71,7 +79,9 @@ impl TileLayout {
     pub fn supports_ldsm_a(&self, matmul: &MatmulGenerator) -> bool {
         let a_row_major = self.a.nth_child(1).unwrap_single().stride == 1;
         let mma_atom = MmaAtom::new(matmul.matmul_op.precision);
-        mma_atom.supports_ldsm() && (a_row_major || cpp_sizeof(matmul.load_a_dtype) == 2)
+        mma_atom.supports_ldsm()
+            && (a_row_major || cpp_sizeof(matmul.load_a_dtype) == 2)
+            && mma_atom.cpp_data_type_a() == cpp_data_type(matmul.load_a_dtype)
     }
 
     pub fn requires_ldsm_transpose_a(&self) -> bool {
@@ -83,7 +93,9 @@ impl TileLayout {
         let b_row_major = self.b.nth_child(0).unwrap_single().stride == 1;
 
         let mma_atom = MmaAtom::new(matmul.matmul_op.precision);
-        mma_atom.supports_ldsm() && (!b_row_major || cpp_sizeof(matmul.load_b_dtype) == 2)
+        mma_atom.supports_ldsm()
+            && (!b_row_major || cpp_sizeof(matmul.load_b_dtype) == 2)
+            && mma_atom.cpp_data_type_b() == cpp_data_type(matmul.load_b_dtype)
     }
 
     pub fn requires_ldsm_transpose_b(&self) -> bool {
@@ -92,7 +104,7 @@ impl TileLayout {
     }
 }
 
-fn find_tile_layout(matmul: &MatmulGenerator, architecture: Architecture) -> TileLayout {
+fn find_tile_layout(matmul: &MatmulGenerator, architecture: Architecture) -> (TileLayout, u32) {
     let compute_smem_usage = |tile_layout: &TileLayout| {
         let mainloop_usage =
             tile_layout.a.cosize() * MAINLOOP_TILE_SLOTS * cpp_sizeof(matmul.load_a_dtype)
@@ -224,9 +236,11 @@ fn find_tile_layout(matmul: &MatmulGenerator, architecture: Architecture) -> Til
         }
     }
 
-    best_layout
+    let layout = best_layout
         .expect("no valid tile layouts found?")
-        .tile_layout
+        .tile_layout;
+    let needed_smem = compute_smem_usage(&layout);
+    (layout, needed_smem)
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -304,6 +318,15 @@ impl MmaAtom {
     }
 }
 
+impl Display for MmaAtom {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MmaAtom::UniversalFma => write!(f, "UniversalFMA<float>"),
+            _ => write!(f, "{self:?}"),
+        }
+    }
+}
+
 impl Sm80MatmulGenerator<'_> {
     pub fn emit(&mut self) {
         self.builder
@@ -326,7 +349,7 @@ impl Sm80MatmulGenerator<'_> {
         let sym_input_b = self.builder.new_symbol();
 
         let mut pointwise_ctx_a = PointwiseContext::default();
-        pointwise_ctx_a.insert(self.matmul.input_a_root, sym_input_a);
+        pointwise_ctx_a.insert(self.matmul.input_a_root, sym_input_a, DataClass::Float);
         let mut code_a = self.builder.dangling_section();
         let sym_result_a = pointwise_ctx_a.emit(
             &self.matmul.op_subgraph,
@@ -335,7 +358,7 @@ impl Sm80MatmulGenerator<'_> {
         );
 
         let mut pointwise_ctx_b = PointwiseContext::default();
-        pointwise_ctx_b.insert(self.matmul.input_b_root, sym_input_b);
+        pointwise_ctx_b.insert(self.matmul.input_b_root, sym_input_b, DataClass::Float);
         let mut code_b = self.builder.dangling_section();
         let sym_result_b = pointwise_ctx_b.emit(
             &self.matmul.op_subgraph,
@@ -350,7 +373,7 @@ impl Sm80MatmulGenerator<'_> {
                     transform(tensor_a, [](auto x) {{
                         float {sym_input_a} = static_cast<float>(x);
                         {code_a}
-                        return {sym_result_a};
+                        return static_cast<decltype(x)>({sym_result_a});
                     }});
                 }}
 
@@ -359,7 +382,7 @@ impl Sm80MatmulGenerator<'_> {
                      transform(tensor_b, [](auto x) {{
                         float {sym_input_b} = static_cast<float>(x);
                         {code_b}
-                        return {sym_result_b};
+                        return static_cast<decltype(x)>({sym_result_b});
                     }});
                 }}
             }};
@@ -373,7 +396,7 @@ impl Sm80MatmulGenerator<'_> {
             let mut pointwise_code = self.builder.dangling_section();
             let mut pointwise_ctx = PointwiseContext::default();
             let input_sym = pointwise_code.new_symbol();
-            pointwise_ctx.insert(self.matmul.matmul_node, input_sym);
+            pointwise_ctx.insert(self.matmul.matmul_node, input_sym, DataClass::Float);
             let output_sym =
                 pointwise_ctx.emit(&self.matmul.op_subgraph, leaf.node, &mut pointwise_code);
 
@@ -408,7 +431,7 @@ impl Sm80MatmulGenerator<'_> {
                     auto thr_smem_c = thr_copy.partition_S(tensor_c);
                     auto thr_reg_c = make_fragment_like(thr_smem_c);
                     auto thr_gmem_out = thr_copy.partition_D(gmem_out);
-                    copy(tiled_copy, thr_smem_c, thr_reg_c);
+                    copy(thr_smem_c, thr_reg_c);
                     
                     auto thr_reg_c_converted = make_tensor<{}>(thr_reg_c.layout());
                     transform(thr_reg_c, thr_reg_c_converted, [](auto x) {{
@@ -435,7 +458,7 @@ impl Sm80MatmulGenerator<'_> {
                          thr_pred(i) = get<0>(coord) < size<0>(layout_gmem_out) &&
                                        get<1>(coord) < size<1>(layout_gmem_out);
                        }}
-                
+
                        copy_if(thr_pred, thr_reg_c_converted, thr_gmem_out);
                      }}
                 }}
@@ -445,7 +468,7 @@ impl Sm80MatmulGenerator<'_> {
                 copy_pattern.thread_layout,
                 copy_pattern.value_layout,
                 cpp_data_type(leaf.output_dtype),
-                cpp_data_type(leaf.output_dtype)
+                cpp_data_type(leaf.output_dtype),
             });
         }
 
@@ -548,6 +571,9 @@ impl Sm80MatmulGenerator<'_> {
             )
         };
 
+        let specialized_copy_a = self.tile_layout.supports_ldsm_a(self.matmul);
+        let specialized_copy_b = self.tile_layout.supports_ldsm_b(self.matmul);
+
         let layout_gmem_a = &self.matmul.layout_gmem_a;
         let layout_gmem_b = &self.matmul.layout_gmem_b;
 
@@ -560,13 +586,13 @@ impl Sm80MatmulGenerator<'_> {
         let dtype_accum = cpp_data_type(self.matmul.matmul_op.precision.accumulator_type());
 
         self.builder.section("kernel").emit(formatdoc! {r#"
-            __global__ __launch_bounds__(256) void matmul({in_dtype_a} *a, {in_dtype_b} *b, {leaf_out_args}) {{
+            extern "C" __global__ __launch_bounds__(256) void matmul({in_dtype_a} *a, {in_dtype_b} *b, {leaf_out_args}) {{
                 using TileSize = Shape<Int<{m}>, Int<{n}>, Int<{k}>>;
             
                 auto tiled_copy_g2s_a = make_tiled_copy(Copy_Atom<{copy_g2s_a_atom}, {in_dtype_a}>{{}}, {copy_g2s_a_thr_layout}{{}}, {copy_g2s_a_val_layout}{{}});
                 auto tiled_copy_g2s_b = make_tiled_copy(Copy_Atom<{copy_g2s_b_atom}, {in_dtype_b}>{{}}, {copy_g2s_b_thr_layout}{{}}, {copy_g2s_b_val_layout}{{}});
                 
-                auto tiled_mma = make_tiled_mma({mma_atom:?}{{}}, Layout<Shape<_2, _4>>{{}}, TileSize{{}});
+                auto tiled_mma = make_tiled_mma({mma_atom}{{}}, Layout<Shape<_2, _4>>{{}}, TileSize{{}});
                 
                 auto tiled_copy_s2r_a = make_tiled_copy_A(Copy_Atom<{copy_atom_s2r_a}, {in_dtype_a}>{{}}, tiled_mma);
                 auto tiled_copy_s2r_b = make_tiled_copy_B(Copy_Atom<{copy_atom_s2r_b}, {in_dtype_b}>{{}}, tiled_mma);
@@ -575,7 +601,7 @@ impl Sm80MatmulGenerator<'_> {
                     {dtype_accum}, {layout_gmem_a}, {layout_gmem_b}, MainloopFusion, Epilogue<TileSize>,
                     TileSize, {layout_smem_a}, {layout_smem_b}, {layout_smem_c}, decltype(tiled_copy_g2s_a),
                     decltype(tiled_copy_g2s_b), decltype(tiled_copy_s2r_a), decltype(tiled_copy_s2r_b),
-                    decltype(tiled_mma), {PIPELINE}>;
+                    decltype(tiled_mma), {PIPELINE}, {specialized_copy_a}, {specialized_copy_b}>;
                     
                 extern __shared__ char shared_storage_raw[];
                 
@@ -635,7 +661,7 @@ mod tests {
 
         let matmul =
             MatmulGenerator::new(&OpSubgraph::from_nodes(&Arc::new(graph), vec![c])).unwrap();
-        let tile_layout = find_tile_layout(&matmul, Architecture::Sm80a);
+        let tile_layout = find_tile_layout(&matmul, Architecture::Sm80a).0;
 
         assert_eq!(
             tile_layout,
@@ -645,13 +671,5 @@ mod tests {
                 c: Layout::from_sizes_and_strides([(128, 1), (128, 132)]),
             }
         );
-
-        std::fs::write(
-            "out.cu",
-            generate_sm80(&matmul, Architecture::Sm80a)
-                .build_source()
-                .as_bytes(),
-        )
-        .unwrap();
     }
 }
