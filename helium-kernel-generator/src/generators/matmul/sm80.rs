@@ -423,6 +423,7 @@ impl Sm80MatmulGenerator<'_> {
                     const auto coord_c = make_coord(blockIdx.x, blockIdx.y);
                     auto layout_gmem_out = {layout_gmem_out}{{}};
                     auto gmem_out = make_tensor(leaf{leaf_index}, layout_gmem_out);
+                    auto tile_gmem_out = local_tile(gmem_out, make_shape(size<0>(TileSize{{}}), size<1>(TileSize{{}})), coord_c);
 
                     auto tiled_copy = make_tiled_copy(Copy_Atom<UniversalCopy<{}>, {}>{{}},
                         {}{{}},
@@ -430,7 +431,7 @@ impl Sm80MatmulGenerator<'_> {
                     auto thr_copy = tiled_copy.get_slice(threadIdx.x);
                     auto thr_smem_c = thr_copy.partition_S(tensor_c);
                     auto thr_reg_c = make_fragment_like(thr_smem_c);
-                    auto thr_gmem_out = thr_copy.partition_D(gmem_out);
+                    auto thr_gmem_out = thr_copy.partition_D(tile_gmem_out);
                     copy(thr_smem_c, thr_reg_c);
                     
                     auto thr_reg_c_converted = make_tensor<{}>(thr_reg_c.layout());

@@ -148,8 +148,8 @@ fn matmul_no_fusion(
     )]
     precision: Precision,
 ) {
-    let mat_a = Mat::from_fn(16, 16, |_, _| rand::random::<f32>());
-    let mat_b = Mat::from_fn(16, 16, |_, _| rand::random::<f32>());
+    let mat_a = Mat::from_fn(257, 257, |_, _| rand::random::<f32>());
+    let mat_b = Mat::from_fn(257, 257, |_, _| rand::random::<f32>());
 
     test_matmul(
         &mat_a,

@@ -84,7 +84,7 @@ impl KernelBuilder {
         let source = self.build_source();
         let bundled_headers = BundledHeaders::get()?;
 
-        //std::fs::write("out.cu", source.as_bytes()).unwrap();
+        std::fs::write("out.cu", source.as_bytes()).unwrap();
 
         static SET_HEAP_SIZE: Once = Once::new();
         SET_HEAP_SIZE.call_once(|| unsafe {
