@@ -6,7 +6,10 @@ use helium_ir::{
     data_type::DataType,
     opgraph::{
         Descriptor, OpGraph,
-        op::{ChangeDataType, Matmul, Op, precision::Precision},
+        op::{
+            ChangeDataType, Matmul, Op,
+            precision::{F8Mode, Precision},
+        },
         subgraph::OpSubgraph,
     },
     shape::Shape,
@@ -127,7 +130,20 @@ fn test_matmul(
                 _ => unreachable!(),
             };
 
-            if !relative_eq!(expected, actual, epsilon = 1e-3, max_relative = 1e-2) {
+            let (epsilon, max_relative) = if matches!(
+                precision,
+                Precision::MulF8AccumF16 { .. } | Precision::MulF8AccumF32 { .. }
+            ) {
+                (1e-2, 1e-1)
+            } else {
+                (1e-3, 1e-2)
+            };
+            if !relative_eq!(
+                expected,
+                actual,
+                epsilon = epsilon,
+                max_relative = max_relative
+            ) {
                 panic!("failed at ({i}, {j}): expected = {expected}, actual = {actual}");
             }
         }
@@ -135,6 +151,7 @@ fn test_matmul(
 }
 
 #[rstest]
+#[cfg_attr(debug_assertions, ignore)]
 fn matmul_no_fusion(
     #[values(DataType::F32, DataType::Bf16, DataType::F16)] input_dtype_a: DataType,
     #[values(DataType::F32, DataType::Bf16, DataType::F16)] input_dtype_b: DataType,
@@ -144,7 +161,11 @@ fn matmul_no_fusion(
         Precision::MulTf32AccumF32,
         Precision::MulBf16AccumF32,
         Precision::MulF16AccumF32,
-        Precision::MulF16AccumF16
+        Precision::MulF16AccumF16,
+        Precision::MulF8AccumF32 { mode_a: F8Mode::E4M3, mode_b: F8Mode::E4M3 },
+        Precision::MulF8AccumF32 { mode_a: F8Mode::E4M3, mode_b: F8Mode::E5M2 },
+        Precision::MulF8AccumF32 { mode_a: F8Mode::E5M2, mode_b: F8Mode::E4M3 },
+        Precision::MulF8AccumF32 { mode_a: F8Mode::E5M2, mode_b: F8Mode::E5M2 },
     )]
     precision: Precision,
 ) {

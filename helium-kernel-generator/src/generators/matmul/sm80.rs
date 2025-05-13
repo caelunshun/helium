@@ -181,7 +181,7 @@ fn find_tile_layout(matmul: &MatmulGenerator, architecture: Architecture) -> (Ti
         (128, 128, 32),
         (128, 128, 64),
     ] {
-        let tile_layout_c = Layout::from_sizes_and_strides([(m, 1), (n, m + padding_c)]);
+        let tile_layout_c = Layout::from_sizes_and_strides([(m, n + padding_c), (n, 1)]);
         let candidate_layouts_a = [
             Layout::from_sizes_and_strides([(m, k + padding_a), (k, 1)]),
             Layout::from_sizes_and_strides([(m, 1), (k, m + padding_a)]),
@@ -669,7 +669,7 @@ mod tests {
             TileLayout {
                 a: Layout::from_sizes_and_strides([(128, 72), (64, 1)]),
                 b: Layout::from_sizes_and_strides([(128, 68), (64, 1)]),
-                c: Layout::from_sizes_and_strides([(128, 1), (128, 132)]),
+                c: Layout::from_sizes_and_strides([(128, 132), (128, 1)]),
             }
         );
     }

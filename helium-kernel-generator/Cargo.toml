@@ -15,11 +15,16 @@ thiserror = "2"
 zstd = "0.13"
 itertools = "0.14"
 bumpalo = "3"
+gcd = "2"
 
 fd-lock = { version = "4", optional = true }
 blake3 = { version = "1", optional = true }
 bincode = { version = "2", optional = true }
 directories = { version = "6", optional = true }
+
+[[bench]]
+name = "matmul"
+harness = false
 
 [dev-dependencies]
 rstest = "0.25"
@@ -37,6 +42,11 @@ zstd = "0.13"
 version = "0.16.4"
 default-features = false
 features = ["cuda-version-from-build-system", "std", "dynamic-linking", "nvrtc", "driver", "f16"]
+
+[dev-dependencies.cudarc]
+version = "0.16.4"
+default-features = false
+features = ["cuda-version-from-build-system", "std", "dynamic-linking", "nvrtc", "driver", "f16", "cublaslt"]
 
 [features]
 default = ["disk-cache"]

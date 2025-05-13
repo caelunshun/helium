@@ -29,6 +29,16 @@ impl CopyVectorizationType {
         }
     }
 
+    pub fn byte_size(self) -> u32 {
+        match self {
+            CopyVectorizationType::Uint8 => 1,
+            CopyVectorizationType::Uint16 => 2,
+            CopyVectorizationType::Uint32 => 4,
+            CopyVectorizationType::Uint64 => 8,
+            CopyVectorizationType::Uint128 => 16,
+        }
+    }
+
     pub fn with_alignment_restriction(self, align: u32) -> Self {
         match self {
             CopyVectorizationType::Uint128 if align < 16 => {
@@ -182,6 +192,41 @@ pub fn find_gmem_copy_pattern(
     }
     let vectorization_type = vectorization_type.with_alignment_restriction(alignment);
 
+    // If achieved vectorization width is less than the value size along the major axis,
+    // then this would lead to strided instructions, killing performance.
+    // In that case, we try to redistribute the values according to the vectorization
+    // type.
+    if vectorization_type.byte_size() < value_layout[order[0]].size * bytes_per_element {
+        let fewer_values_per_thread_factor =
+            value_layout[order[0]].size * bytes_per_element / vectorization_type.byte_size();
+        value_layout[order[0]].size /= fewer_values_per_thread_factor;
+        thread_layout[order[0]].size *= fewer_values_per_thread_factor;
+
+        // there are now fewer threads along the remaining axes, so we have to divide
+        // them out while increasing the value sizes along the remaining axes.
+        let mut extra_threads = fewer_values_per_thread_factor;
+        for &i in &order[1..] {
+            if extra_threads == 1 {
+                break;
+            }
+
+            let divisor = gcd::binary_u32(extra_threads, thread_layout[i].size);
+            thread_layout[i].size /= divisor;
+            value_layout[i].size *= divisor;
+            extra_threads /= divisor;
+        }
+
+        // update strides
+        let mut threads_stride = 1;
+        let mut values_stride = 1;
+        for &i in &order {
+            thread_layout[i].stride = threads_stride;
+            value_layout[i].stride = values_stride;
+            threads_stride *= thread_layout[i].size;
+            values_stride *= value_layout[i].size;
+        }
+    }
+
     CopyPattern {
         thread_layout: Layout::MultiMode(
             thread_layout.into_iter().map(Layout::SingleMode).collect(),
@@ -266,8 +311,8 @@ mod tests {
                 2
             ),
             CopyPattern {
-                thread_layout: Layout::new_column_major(&[4, 64]),
-                value_layout: Layout::new_column_major(&[8, 1]),
+                thread_layout: Layout::new_column_major(&[32, 8]),
+                value_layout: Layout::new_column_major(&[1, 8]),
                 vectorization_type: CopyVectorizationType::Uint16,
             }
         );
@@ -300,15 +345,15 @@ mod tests {
                 4
             ),
             CopyPattern {
-                thread_layout: Layout::new_column_major(&[32, 8]),
-                value_layout: Layout::new_column_major(&[4, 8]),
+                thread_layout: Layout::new_column_major(&[128, 2]),
+                value_layout: Layout::new_column_major(&[1, 32]),
                 vectorization_type: CopyVectorizationType::Uint32,
             }
         );
     }
 
     #[test]
-    fn vectorization_for_k_tile() {
+    fn smem_layout_affects_vectorization() {
         assert_eq!(
             find_gmem_copy_pattern(
                 &Layout::new_row_major(&[256, 256]),
@@ -317,8 +362,8 @@ mod tests {
                 2
             ),
             CopyPattern {
-                thread_layout: Layout::new_row_major(&[64, 4]),
-                value_layout: Layout::new_row_major(&[2, 8]),
+                thread_layout: Layout::new_row_major(&[8, 32]),
+                value_layout: Layout::new_row_major(&[16, 1]),
                 vectorization_type: CopyVectorizationType::Uint16,
             }
         );

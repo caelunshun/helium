@@ -1,3 +1,6 @@
+use crate::Error;
+use cudarc::driver::{CudaContext, sys::CUdevice_attribute};
+
 /// SM architecture version.
 ///
 /// "a" suffixes mean that kernels generated for that architecture
@@ -22,6 +25,29 @@ pub enum Architecture {
 }
 
 impl Architecture {
+    pub fn from_device(device: &CudaContext) -> Result<Self, Error> {
+        let sm_major =
+            device.attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR)?;
+        let sm_minor =
+            device.attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR)?;
+
+        if sm_major < 8 {
+            Err(Error::UnsupportedArchitecture)
+        } else if sm_major == 8 && sm_minor == 0 {
+            Ok(Architecture::Sm80a)
+        } else if sm_major == 9 && sm_minor == 0 {
+            Ok(Architecture::Sm90a)
+        } else if sm_major == 10 && sm_minor == 0 {
+            Ok(Architecture::Sm100a)
+        } else if sm_major == 12 && sm_minor == 0 {
+            Ok(Architecture::Sm120a)
+        } else if sm_major > 8 || (sm_major == 8 && sm_minor == 9) {
+            Ok(Architecture::Sm89)
+        } else {
+            Ok(Architecture::Sm86)
+        }
+    }
+
     /// Maximum size of shared memory that can be used by a kernel
     /// (requires dynamic shared memory).
     pub(crate) fn max_smem_size(&self) -> u32 {

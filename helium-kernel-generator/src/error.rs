@@ -8,4 +8,6 @@ pub enum Error {
     Nvrtc(#[from] cudarc::nvrtc::CompileError),
     #[error(transparent)]
     Cuda(#[from] cudarc::driver::DriverError),
+    #[error("helium requires CUDA compute capability >= 80")]
+    UnsupportedArchitecture,
 }
