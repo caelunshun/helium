@@ -91,6 +91,11 @@ impl Layout {
         mode
     }
 
+    pub fn is_single(&self) -> bool {
+        matches!(self, Layout::SingleMode(_))
+            || matches!(self, Layout::MultiMode(v) if v.len() == 1)
+    }
+
     pub fn nth_child(&self, n: usize) -> &Layout {
         match self {
             Layout::SingleMode(_) => {

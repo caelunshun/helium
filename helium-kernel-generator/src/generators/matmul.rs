@@ -12,7 +12,11 @@
 //! scalar alpha and beta values and an accumulator matrix. Those extra operations are more
 //! elegantly expressed as optional mainloop (for alpha/beta) and epilogue (for accumulator matrix) fusions.
 
-use crate::{Error, architecture::Architecture, cute::Layout};
+use crate::{
+    Error,
+    architecture::{Architecture, L2CacheSize},
+    cute::Layout,
+};
 use ahash::{AHashMap, AHashSet};
 use bumpalo::Bump;
 use cudarc::{
@@ -46,6 +50,13 @@ pub struct MatmulGenerator {
     load_a_dtype: DataType,
     load_b_dtype: DataType,
     accumulator_dtype: DataType,
+    /// Data type used to store an output tile
+    /// before the epilogue. Typically, this is
+    /// the same as the accumulator type, but
+    /// if all leaves downcast to a smaller data type,
+    /// then we can use that smaller data type and
+    /// save on shared memory + bandwidth.
+    output_tile_dtype: DataType,
     matmul_op: Matmul,
     matmul_node: NodeId,
     leafs: Vec<Leaf>,
@@ -92,6 +103,7 @@ impl MatmulGenerator {
         let load_a_dtype = op_subgraph.graph().get(input_a_root).descriptor().data_type;
         let load_b_dtype = op_subgraph.graph().get(input_b_root).descriptor().data_type;
         let accumulator_dtype = matmul.precision.accumulator_type();
+        let output_tile_dtype = find_output_tile_dtype(matmul, &leafs);
 
         let layout_gmem_a =
             Layout::from_tensor_shape(&op_subgraph.graph().get(input_a_root).descriptor().shape);
@@ -111,14 +123,19 @@ impl MatmulGenerator {
             load_a_dtype,
             load_b_dtype,
             accumulator_dtype,
+            output_tile_dtype,
             matmul_node,
             leafs,
         })
     }
 
     /// Generates a matmul kernel for the given target architecture.
-    pub fn generate(&self, architecture: Architecture) -> Result<CompiledKernel, Error> {
-        let (kernel, tile_layout) = sm80::generate_sm80(self, architecture);
+    pub fn generate(
+        &self,
+        architecture: Architecture,
+        l2_cache_size: L2CacheSize,
+    ) -> Result<CompiledKernel, Error> {
+        let (kernel, tile_layout) = sm80::generate_sm80(self, architecture, l2_cache_size);
         let dynamic_smem_bytes = kernel.dynamic_smem_bytes();
 
         let m = self.layout_gmem_a.nth_child(0).size();
@@ -189,8 +206,8 @@ impl CompiledKernel {
 
             builder.launch(LaunchConfig {
                 grid_dim: (
-                    self.m.div_ceil(self.tile_size_m),
-                    self.n.div_ceil(self.tile_size_n),
+                    self.m.div_ceil(self.tile_size_m) * self.n.div_ceil(self.tile_size_n),
+                    1,
                     1,
                 ),
                 block_dim: (256, 1, 1),
@@ -313,6 +330,29 @@ fn is_supported_epilogue_fusion_op(op: &Op) -> bool {
             | Op::SwapDims(_)
     )
 }
+
+fn find_output_tile_dtype(matmul_op: &Matmul, leafs: &[Leaf]) -> DataType {
+    if leafs
+        .iter()
+        .all(|leaf| leafs[0].output_dtype == leaf.output_dtype)
+    {
+        leafs[0].output_dtype
+    } else {
+        matmul_op.precision.accumulator_type()
+    }
+}
+
+// /// Returns whether `a` has strictly greater
+// /// precision than `b` (precision referring to both
+// /// mantissa and exponent bits, i.e. f16 is not greater
+// /// "precision" than bf16 despite having more mantissa bits)
+// fn is_higher_precision(a: DataType, b: DataType) -> bool {
+//     match a {
+//         DataType::F16 | DataType::Bf16 => false,
+//         DataType::F32 => b != DataType::F32,
+//         _ => panic!("not a float data type: {a:?}"),
+//     }
+// }
 
 fn is_supported_mainloop_fusion_op(op: &Op) -> bool {
     matches!(

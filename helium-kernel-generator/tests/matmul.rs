@@ -14,7 +14,10 @@ use helium_ir::{
     },
     shape::Shape,
 };
-use helium_kernel_generator::{architecture::Architecture, generators::matmul::MatmulGenerator};
+use helium_kernel_generator::{
+    architecture::{Architecture, L2CacheSize},
+    generators::matmul::MatmulGenerator,
+};
 use rstest::rstest;
 use std::sync::Arc;
 
@@ -46,15 +49,19 @@ fn test_matmul(
     }));
     opgraph.new_output(output);
 
+    let device = CudaContext::new(0).unwrap();
+
     let kernel = MatmulGenerator::new(&OpSubgraph::from_nodes(
         &Arc::new(opgraph),
         vec![matmul, output],
     ))
     .unwrap()
-    .generate(Architecture::Sm89) // TODO don't hardcode
+    .generate(
+        Architecture::from_device(&device).unwrap(),
+        L2CacheSize::from_device(&device).unwrap(),
+    )
     .unwrap();
 
-    let device = CudaContext::new(0).unwrap();
     let stream = device.default_stream();
     let module = kernel.load_on_device(&device).unwrap();
 
@@ -169,8 +176,8 @@ fn matmul_no_fusion(
     )]
     precision: Precision,
 ) {
-    let mat_a = Mat::from_fn(257, 257, |_, _| rand::random::<f32>());
-    let mat_b = Mat::from_fn(257, 257, |_, _| rand::random::<f32>());
+    let mat_a = Mat::from_fn(4097, 4097, |_, _| rand::random::<f32>());
+    let mat_b = Mat::from_fn(4097, 4097, |_, _| rand::random::<f32>());
 
     test_matmul(
         &mat_a,

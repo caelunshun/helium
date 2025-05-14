@@ -1,5 +1,5 @@
 use crate::{
-    architecture::Architecture,
+    architecture::{Architecture, L2CacheSize},
     builder::{KernelBuilder, cpp_data_type, cpp_raw_byte_type, cpp_sizeof},
     cute::Layout,
     generators::matmul::{
@@ -26,6 +26,7 @@ struct Sm80MatmulGenerator<'a> {
     matmul: &'a MatmulGenerator,
     builder: KernelBuilder,
     tile_layout: TileLayout,
+    thread_block_swizzle: Layout,
 }
 
 /// Generates a fused matmul kernel that uses up to SM80 (Ampere) features
@@ -33,12 +34,15 @@ struct Sm80MatmulGenerator<'a> {
 pub fn generate_sm80(
     matmul: &MatmulGenerator,
     actual_architecture: Architecture,
+    l2_cache_size: L2CacheSize,
 ) -> (KernelBuilder, TileLayout) {
     let (tile_layout, needed_smem) = find_tile_layout(matmul, actual_architecture);
+    let thread_block_swizzle = find_thread_block_swizzle(matmul, &tile_layout, l2_cache_size);
     let mut generator = Sm80MatmulGenerator {
         matmul,
         builder: KernelBuilder::new("matmul_sm80"),
         tile_layout,
+        thread_block_swizzle,
     };
     generator.emit();
     generator.builder.add_dynamic_smem(needed_smem);
@@ -77,7 +81,8 @@ impl TileLayout {
     // format (to understand what this means, see the PTX ISA docs).
 
     pub fn supports_ldsm_a(&self, matmul: &MatmulGenerator) -> bool {
-        let a_row_major = self.a.nth_child(1).unwrap_single().stride == 1;
+        let a_row_major =
+            self.a.nth_child(1).is_single() && self.a.nth_child(1).unwrap_single().stride == 1;
         let mma_atom = MmaAtom::new(matmul.matmul_op.precision);
         mma_atom.supports_ldsm()
             && (a_row_major || cpp_sizeof(matmul.load_a_dtype) == 2)
@@ -85,12 +90,14 @@ impl TileLayout {
     }
 
     pub fn requires_ldsm_transpose_a(&self) -> bool {
-        let a_row_major = self.a.nth_child(1).unwrap_single().stride == 1;
+        let a_row_major =
+            self.a.nth_child(1).is_single() && self.a.nth_child(1).unwrap_single().stride == 1;
         !a_row_major
     }
 
     pub fn supports_ldsm_b(&self, matmul: &MatmulGenerator) -> bool {
-        let b_row_major = self.b.nth_child(0).unwrap_single().stride == 1;
+        let b_row_major =
+            self.b.nth_child(0).is_single() && self.b.nth_child(0).unwrap_single().stride == 1;
 
         let mma_atom = MmaAtom::new(matmul.matmul_op.precision);
         mma_atom.supports_ldsm()
@@ -99,7 +106,8 @@ impl TileLayout {
     }
 
     pub fn requires_ldsm_transpose_b(&self) -> bool {
-        let b_row_major = self.b.nth_child(0).unwrap_single().stride == 1;
+        let b_row_major =
+            self.b.nth_child(0).is_single() && self.b.nth_child(0).unwrap_single().stride == 1;
         b_row_major
     }
 }
@@ -109,7 +117,7 @@ fn find_tile_layout(matmul: &MatmulGenerator, architecture: Architecture) -> (Ti
         let mainloop_usage =
             tile_layout.a.cosize() * MAINLOOP_TILE_SLOTS * cpp_sizeof(matmul.load_a_dtype)
                 + tile_layout.b.cosize() * MAINLOOP_TILE_SLOTS * cpp_sizeof(matmul.load_b_dtype);
-        let epilogue_usage = tile_layout.c.cosize() * cpp_sizeof(matmul.accumulator_dtype);
+        let epilogue_usage = tile_layout.c.cosize() * cpp_sizeof(matmul.output_tile_dtype);
         mainloop_usage.max(epilogue_usage)
     };
 
@@ -171,7 +179,7 @@ fn find_tile_layout(matmul: &MatmulGenerator, architecture: Architecture) -> (Ti
     // thus the higher than usual amount of padding.
     let padding_a = 16 / cpp_sizeof(matmul.load_a_dtype);
     let padding_b = 16 / cpp_sizeof(matmul.load_b_dtype);
-    let padding_c = 16 / cpp_sizeof(matmul.accumulator_dtype);
+    let padding_c = 16 / cpp_sizeof(matmul.output_tile_dtype);
 
     for (m, n, k) in [
         (256, 128, 32),
@@ -182,12 +190,29 @@ fn find_tile_layout(matmul: &MatmulGenerator, architecture: Architecture) -> (Ti
         (128, 128, 64),
     ] {
         let tile_layout_c = Layout::from_sizes_and_strides([(m, n + padding_c), (n, 1)]);
+
         let candidate_layouts_a = [
-            Layout::from_sizes_and_strides([(m, k + padding_a), (k, 1)]),
+            if k == 32 && matmul.load_a_dtype.size_in_bits() == 16 {
+                // special padding scheme: padding every other row.
+                Layout::MultiMode(vec![
+                    Layout::from_sizes_and_strides([(2, k), (m / 2, k * 2 + padding_a)]),
+                    Layout::from_sizes_and_strides([(k, 1)]),
+                ])
+            } else {
+                Layout::from_sizes_and_strides([(m, k + padding_a), (k, 1)])
+            },
             Layout::from_sizes_and_strides([(m, 1), (k, m + padding_a)]),
         ];
         let candidate_layouts_b = [
-            Layout::from_sizes_and_strides([(n, k + padding_b), (k, 1)]),
+            if k == 32 && matmul.load_b_dtype.size_in_bits() == 16 {
+                // special padding scheme: padding every other column.
+                Layout::MultiMode(vec![
+                    Layout::from_sizes_and_strides([(2, k), (n / 2, k * 2 + padding_b)]),
+                    Layout::from_sizes_and_strides([(k, 1)]),
+                ])
+            } else {
+                Layout::from_sizes_and_strides([(n, k + padding_b), (k, 1)])
+            },
             Layout::from_sizes_and_strides([(n, 1), (k, n + padding_b)]),
         ];
         for tile_layout_a in &candidate_layouts_a {
@@ -241,6 +266,30 @@ fn find_tile_layout(matmul: &MatmulGenerator, architecture: Architecture) -> (Ti
         .tile_layout;
     let needed_smem = compute_smem_usage(&layout);
     (layout, needed_smem)
+}
+
+fn find_thread_block_swizzle(
+    matmul: &MatmulGenerator,
+    tile_layout: &TileLayout,
+    _l2_cache_size: L2CacheSize,
+) -> Layout {
+    let tm = tile_layout.m();
+    let tn = tile_layout.n();
+
+    let cm = matmul.layout_gmem_a.nth_child(0).size().div_ceil(tm);
+    let cn = matmul.layout_gmem_b.nth_child(0).size().div_ceil(tn);
+
+    // target fixed 2048x2048 thread block structure
+    // for now...
+    let m = (2048u32.div_ceil(tm)).min(cm);
+    let n = (2048u32.div_ceil(tn)).min(cn);
+
+    Layout::MultiMode(vec![Layout::from_sizes_and_strides([
+        (n, 1),
+        (m, cn),
+        (cn.div_ceil(n), n),
+        (cm.div_ceil(m), m * cn),
+    ])])
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -371,7 +420,7 @@ impl Sm80MatmulGenerator<'_> {
                 template <typename TensorA>
                 __device__ void apply_thr_a(TensorA &tensor_a) {{
                     transform(tensor_a, [](auto x) {{
-                        float {sym_input_a} = static_cast<float>(x);
+                        auto {sym_input_a} = x;
                         {code_a}
                         return static_cast<decltype(x)>({sym_result_a});
                     }});
@@ -380,7 +429,7 @@ impl Sm80MatmulGenerator<'_> {
                 template <typename TensorB>
                 __device__ void apply_thr_b(TensorB &tensor_b) {{
                      transform(tensor_b, [](auto x) {{
-                        float {sym_input_b} = static_cast<float>(x);
+                        auto {sym_input_b} = x;
                         {code_b}
                         return static_cast<decltype(x)>({sym_result_b});
                     }});
@@ -416,13 +465,16 @@ impl Sm80MatmulGenerator<'_> {
             let out_type = cpp_data_type(leaf.output_dtype);
 
             fields.emit(formatdoc! { r#"
-                {out_type} *leaf{leaf_index};
+                {out_type}* __restrict__ leaf{leaf_index};
             "#});
             code.emit(formatdoc! {r#"
                 {{
-                    const auto coord_c = make_coord(blockIdx.x, blockIdx.y);
                     auto layout_gmem_out = {layout_gmem_out}{{}};
-                    auto gmem_out = make_tensor(leaf{leaf_index}, layout_gmem_out);
+                    const auto coord_c =
+                        idx2crd(_thread_block_swizzle(blockIdx.x),
+                                make_shape((size<0>(layout_gmem_out) + size<0>(TileSize{{}}) - 1) / size<0>(TileSize{{}}),
+                                           (size<0>(layout_gmem_out) + size<1>(TileSize{{}}) - 1) / size<1>(TileSize{{}})));
+                    auto gmem_out = make_tensor(make_gmem_ptr(leaf{leaf_index}), layout_gmem_out);
                     auto tile_gmem_out = local_tile(gmem_out, make_shape(size<0>(TileSize{{}}), size<1>(TileSize{{}})), coord_c);
 
                     auto tiled_copy = make_tiled_copy(Copy_Atom<UniversalCopy<{}>, {}>{{}},
@@ -441,27 +493,36 @@ impl Sm80MatmulGenerator<'_> {
                         return static_cast<{}>({output_sym});
                     }});
 
-                    // Check if we need to predicate the copy
-                     const auto end_m = (blockIdx.x + 1) * size<0>(TileSize{{}});
-                     const auto end_n = (blockIdx.y + 1) * size<1>(TileSize{{}});
-                     if (end_m <= size<0>(layout_gmem_out) && end_n <= size<1>(layout_gmem_out)) {{
-                        copy(tiled_copy, thr_reg_c_converted, thr_gmem_out);
-                     }} else {{
-                       auto dummy = make_identity_tensor(
-                           make_shape(size<0>(layout_gmem_out), size<1>(layout_gmem_out)));
-                       auto tile_dummy = local_tile(
-                           dummy, make_shape(size<0>(TileSize{{}}), size<1>(TileSize{{}})), coord_c);
-                       auto thr_dummy = thr_copy.partition_D(tile_dummy);
-                
-                       auto thr_pred = make_tensor<bool>(thr_reg_c_converted.layout());
-                       for (int i = 0; i < size(thr_pred); i++) {{
-                         const auto coord = thr_dummy(i);
-                         thr_pred(i) = get<0>(coord) < size<0>(layout_gmem_out) &&
-                                       get<1>(coord) < size<1>(layout_gmem_out);
-                       }}
+                    // Statically disable predication if possible, to simplify codegen
+                    // and regisster allocation
+                    constexpr bool needs_predication = size<0>(decltype(layout_gmem_out){{}}) % size<0>(TileSize{{}}) != 0
+                                                          || size<1>(decltype(layout_gmem_out){{}}) % size<1>(TileSize{{}}) != 0;
 
-                       copy_if(thr_pred, thr_reg_c_converted, thr_gmem_out);
-                     }}
+                    if constexpr (needs_predication) {{
+                        // Check if we need to predicate the copy
+                         const auto end_m = (blockIdx.x + 1) * size<0>(TileSize{{}});
+                         const auto end_n = (blockIdx.y + 1) * size<1>(TileSize{{}});
+                         if (end_m <= size<0>(layout_gmem_out) && end_n <= size<1>(layout_gmem_out)) {{
+                            copy(tiled_copy, thr_reg_c_converted, thr_gmem_out);
+                         }} else {{
+                           auto dummy = make_identity_tensor(
+                               make_shape(size<0>(layout_gmem_out), size<1>(layout_gmem_out)));
+                           auto tile_dummy = local_tile(
+                               dummy, make_shape(size<0>(TileSize{{}}), size<1>(TileSize{{}})), coord_c);
+                           auto thr_dummy = thr_copy.partition_D(tile_dummy);
+
+                           auto thr_pred = make_tensor<bool>(thr_reg_c_converted.layout());
+                           for (int i = 0; i < size(thr_pred); i++) {{
+                             const auto coord = thr_dummy(i);
+                             thr_pred(i) = get<0>(coord) < size<0>(layout_gmem_out) &&
+                                           get<1>(coord) < size<1>(layout_gmem_out);
+                           }}
+
+                           copy_if(thr_pred, thr_reg_c_converted, thr_gmem_out);
+                         }}
+                    }} else {{ // if constexpr
+                        copy(tiled_copy, thr_reg_c_converted, thr_gmem_out);
+                    }}
                 }}
                 "#,
                 copy_pattern.vectorization_type,
@@ -474,8 +535,9 @@ impl Sm80MatmulGenerator<'_> {
         }
 
         self.builder.section("epilogue").emit(formatdoc! {r#"
-            template<typename TileSize>
+            template<typename TileSize, typename ThreadBlockSwizzle>
             struct Epilogue {{
+                ThreadBlockSwizzle _thread_block_swizzle;
                 {fields}
                 template <typename TensorC>
                 __device__ void apply_tile_c(TensorC tensor_c) {{
@@ -494,7 +556,7 @@ impl Sm80MatmulGenerator<'_> {
         let mut epilogue_args = self.builder.dangling_section();
         for (leaf_index, leaf) in self.matmul.leafs.iter().enumerate() {
             let dtype = cpp_data_type(leaf.output_dtype);
-            leaf_out_args.emit(format!("{dtype} *leaf{leaf_index}"));
+            leaf_out_args.emit(format!("{dtype}* __restrict__ leaf{leaf_index}"));
             if leaf_index != self.matmul.leafs.len() - 1 {
                 leaf_out_args.emit(", ");
             }
@@ -584,10 +646,13 @@ impl Sm80MatmulGenerator<'_> {
 
         let gemm_dtype_a = mma_atom.cpp_data_type_a();
         let gemm_dtype_b = mma_atom.cpp_data_type_b();
-        let dtype_accum = cpp_data_type(self.matmul.matmul_op.precision.accumulator_type());
+        let dtype_accum = cpp_data_type(self.matmul.accumulator_dtype);
+        let dtype_output_tile = cpp_data_type(self.matmul.output_tile_dtype);
+
+        let thread_block_swizzle = &self.thread_block_swizzle;
 
         self.builder.section("kernel").emit(formatdoc! {r#"
-            extern "C" __global__ __launch_bounds__(256) void matmul({in_dtype_a} *a, {in_dtype_b} *b, {leaf_out_args}) {{
+            extern "C" __global__ __launch_bounds__(256) void matmul(const {in_dtype_a}* __restrict__ a, const {in_dtype_b}* __restrict__ b, {leaf_out_args}) {{
                 using TileSize = Shape<Int<{m}>, Int<{n}>, Int<{k}>>;
             
                 auto tiled_copy_g2s_a = make_tiled_copy(Copy_Atom<{copy_g2s_a_atom}, {in_dtype_a}>{{}}, {copy_g2s_a_thr_layout}{{}}, {copy_g2s_a_val_layout}{{}});
@@ -599,20 +664,21 @@ impl Sm80MatmulGenerator<'_> {
                 auto tiled_copy_s2r_b = make_tiled_copy_B(Copy_Atom<{copy_atom_s2r_b}, {in_dtype_b}>{{}}, tiled_mma);
                 
                 using MatmulInstance = Matmul<{in_dtype_a}, {in_dtype_b}, {gemm_dtype_a}, {gemm_dtype_b}, {dtype_accum},
-                    {dtype_accum}, {layout_gmem_a}, {layout_gmem_b}, MainloopFusion, Epilogue<TileSize>,
+                    {dtype_output_tile}, {layout_gmem_a}, {layout_gmem_b}, MainloopFusion, Epilogue<TileSize, {thread_block_swizzle}>,
                     TileSize, {layout_smem_a}, {layout_smem_b}, {layout_smem_c}, decltype(tiled_copy_g2s_a),
                     decltype(tiled_copy_g2s_b), decltype(tiled_copy_s2r_a), decltype(tiled_copy_s2r_b),
-                    decltype(tiled_mma), {PIPELINE}, {specialized_copy_a}, {specialized_copy_b}>;
+                    decltype(tiled_mma), {PIPELINE}, {specialized_copy_a}, {specialized_copy_b}, {thread_block_swizzle}>;
                     
-                extern __shared__ char shared_storage_raw[];
+                __align__(128) extern __shared__ char shared_storage_raw[];
                 
-                auto shared_storage = reinterpret_cast<typename MatmulInstance::SharedStorage *>(shared_storage_raw);
+                auto shared_storage = reinterpret_cast<typename MatmulInstance::SharedStorage* __restrict__>(shared_storage_raw);
                 
                 auto matmul = MatmulInstance {{
                     ._layout_gmem_a = {{}},
                     ._layout_gmem_b = {{}},
                     ._mainloop_fusion = MainloopFusion{{}},
-                    ._epilogue = Epilogue<TileSize>{{ {epilogue_args} }},
+                    ._epilogue = Epilogue<TileSize, {thread_block_swizzle}>{{ ._thread_block_swizzle = {{}},
+                        {epilogue_args} }},
                     ._tile_size = {{}},
                     ._tiled_copy_g2s_a = tiled_copy_g2s_a,
                     ._tiled_copy_g2s_b = tiled_copy_g2s_b,
@@ -621,6 +687,7 @@ impl Sm80MatmulGenerator<'_> {
                     ._tiled_mma = tiled_mma,
                     ._raw_gmem_a = a,
                     ._raw_gmem_b = b,
+                    ._thread_block_swizzle = {{}},
                     ._shared_storage = shared_storage}};
                 matmul.run();
             }}
@@ -632,7 +699,6 @@ impl Sm80MatmulGenerator<'_> {
 mod tests {
     use super::*;
     use helium_ir::{
-        data_type::DataType,
         opgraph::{
             Descriptor, OpGraph,
             op::{Matmul, Op},
@@ -643,34 +709,31 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
-    fn best_tile_layout_gmem_row_major() {
-        let mut graph = OpGraph::new();
-        let a = graph.new_input(Descriptor {
-            shape: Shape::new([256, 256]),
-            data_type: DataType::F16,
+    fn thread_block_swizzle() {
+        let mut opgraph = OpGraph::new();
+        let input_a = opgraph.new_input(Descriptor {
+            shape: Shape::new([2048, 2048]),
+            data_type: DataType::Bf16,
         });
-        let b = graph.new_input(Descriptor {
-            shape: Shape::new([256, 256]),
-            data_type: DataType::F32, // should prevent ldsm.transpose from working
+        let input_b = opgraph.new_input(Descriptor {
+            shape: Shape::new([2048, 2048]),
+            data_type: DataType::Bf16,
         });
-        let c = graph.new_op(Op::Matmul(Matmul {
-            input_a: a,
-            input_b: b,
-            precision: Precision::MulF16AccumF32,
+        let matmul = opgraph.new_op(Op::Matmul(Matmul {
+            precision: Precision::MulBf16AccumF32,
+            input_b,
+            input_a,
         }));
-        graph.new_output(c);
+        opgraph.new_output(matmul);
+        let subgraph = OpSubgraph::from_nodes(&Arc::new(opgraph), vec![matmul]);
+        let generator = MatmulGenerator::new(&subgraph).unwrap();
 
-        let matmul =
-            MatmulGenerator::new(&OpSubgraph::from_nodes(&Arc::new(graph), vec![c])).unwrap();
-        let tile_layout = find_tile_layout(&matmul, Architecture::Sm80a).0;
-
-        assert_eq!(
-            tile_layout,
-            TileLayout {
-                a: Layout::from_sizes_and_strides([(128, 72), (64, 1)]),
-                b: Layout::from_sizes_and_strides([(128, 68), (64, 1)]),
-                c: Layout::from_sizes_and_strides([(128, 132), (128, 1)]),
-            }
-        );
+        let tile_layout = find_tile_layout(&generator, Architecture::Sm89).0;
+        dbg!(&tile_layout);
+        dbg!(find_thread_block_swizzle(
+            &generator,
+            &tile_layout,
+            L2CacheSize(48 * 1024 * 1024)
+        ));
     }
 }

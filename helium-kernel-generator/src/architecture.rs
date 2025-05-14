@@ -70,3 +70,18 @@ impl Architecture {
         format!("-arch={name}")
     }
 }
+
+/// Size of the GPU L2 cache in bytes.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct L2CacheSize(pub u32);
+
+impl L2CacheSize {
+    pub fn from_device(device: &CudaContext) -> Result<Self, Error> {
+        let bytes = device.attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE)?;
+        Ok(Self(bytes as u32))
+    }
+
+    pub fn bytes(&self) -> u32 {
+        self.0
+    }
+}

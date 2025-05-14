@@ -12,10 +12,13 @@ use helium_ir::{
     },
     shape::Shape,
 };
-use helium_kernel_generator::{architecture::Architecture, generators::matmul::MatmulGenerator};
+use helium_kernel_generator::{
+    architecture::{Architecture, L2CacheSize},
+    generators::matmul::MatmulGenerator,
+};
 use std::{sync::Arc, time::Duration};
 
-const WARMUP: u32 = 1;
+const WARMUP: u32 = 0;
 const ITERATIONS: u32 = 1;
 
 fn main() {
@@ -24,11 +27,15 @@ fn main() {
         "Device architecture: {:?}",
         Architecture::from_device(&device).unwrap()
     );
+    println!(
+        "L2 cache size: {}MiB",
+        L2CacheSize::from_device(&device).unwrap().0 / 1024 / 1024
+    );
 
     for (m, n, k, precision) in [
-        (4096, 4096, 4096, Precision::MulTf32AccumF32),
+        //(4096, 4096, 4096, Precision::MulTf32AccumF32),
         (4096, 4096, 4096, Precision::MulBf16AccumF32),
-        (4096, 4096, 4096, Precision::MulF16AccumF32),
+        //(4096, 4096, 4096, Precision::MulF16AccumF32),
     ] {
         let helium_time = bench_generated_matmul(&device, m, n, k, precision);
         let cublaslt_time = bench_cublaslt_matmul(&device, m, n, k, precision);
@@ -78,7 +85,10 @@ fn bench_generated_matmul(
 
     let kernel = MatmulGenerator::new(&op_subgraph)
         .unwrap()
-        .generate(Architecture::from_device(device).unwrap())
+        .generate(
+            Architecture::from_device(device).unwrap(),
+            L2CacheSize::from_device(device).unwrap(),
+        )
         .unwrap();
     let module = kernel.load_on_device(device).unwrap();
 

@@ -227,6 +227,10 @@ pub fn find_gmem_copy_pattern(
         }
     }
 
+    for &i in &order[1..] {
+        value_layout[i].size = 1;
+    }
+
     CopyPattern {
         thread_layout: Layout::MultiMode(
             thread_layout.into_iter().map(Layout::SingleMode).collect(),
@@ -261,7 +265,7 @@ mod tests {
             ),
             CopyPattern {
                 thread_layout: Layout::new_column_major(&[32, 8]),
-                value_layout: Layout::new_column_major(&[4, 8]),
+                value_layout: Layout::new_column_major(&[4, 1]),
                 vectorization_type: CopyVectorizationType::Uint128,
             }
         );
@@ -278,7 +282,7 @@ mod tests {
             ),
             CopyPattern {
                 thread_layout: Layout::new_row_major(&[16, 16]),
-                value_layout: Layout::new_row_major(&[8, 4]),
+                value_layout: Layout::new_row_major(&[1, 4]),
                 vectorization_type: CopyVectorizationType::Uint128,
             }
         );
@@ -312,7 +316,7 @@ mod tests {
             ),
             CopyPattern {
                 thread_layout: Layout::new_column_major(&[32, 8]),
-                value_layout: Layout::new_column_major(&[1, 8]),
+                value_layout: Layout::new_column_major(&[1, 1]),
                 vectorization_type: CopyVectorizationType::Uint16,
             }
         );
@@ -346,7 +350,7 @@ mod tests {
             ),
             CopyPattern {
                 thread_layout: Layout::new_column_major(&[128, 2]),
-                value_layout: Layout::new_column_major(&[1, 32]),
+                value_layout: Layout::new_column_major(&[1, 1]),
                 vectorization_type: CopyVectorizationType::Uint32,
             }
         );
@@ -363,7 +367,7 @@ mod tests {
             ),
             CopyPattern {
                 thread_layout: Layout::new_row_major(&[8, 32]),
-                value_layout: Layout::new_row_major(&[16, 1]),
+                value_layout: Layout::new_row_major(&[1, 1]),
                 vectorization_type: CopyVectorizationType::Uint16,
             }
         );

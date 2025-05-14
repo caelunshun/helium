@@ -1,0 +1,16 @@
+[package]
+name = "helium-kernel-benches"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bytemuck = "1"
+half = "2"
+rand = "0.9"
+helium-kernel-generator = { path = ".." }
+helium-ir = { path = "../../helium-ir" }
+
+[dependencies.cudarc]
+version = "0.16.4"
+default-features = false
+features = ["cuda-version-from-build-system", "std", "dynamic-linking", "nvrtc", "driver", "f16", "cublaslt"]
