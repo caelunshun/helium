@@ -26,7 +26,7 @@ classification, is available in `resnet-train`.
 
 The `helium-playground` directory contains an experimental new graph compiler that supports
 the mainloop fusion and recomputation patterns from the paper. The graph fusion algorithm is
-in `helium-playground/src/fused_graph.rs`. It generates output like the following:
+in `helium-playground/src/fused_graph.rs`. For each fused kernel, it generates an IR like the following:
 
 ```
 
