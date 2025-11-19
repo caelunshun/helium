@@ -252,20 +252,6 @@ fn do_fusions<B: Backend>(graph: &mut InstrGraph<B>, op_graph: &Arc<OpGraph>) {
                 continue 'outer;
             }
         }
-        /*for prev in graph.instr_dependencies(current).collect::<Vec<_>>() {
-            for sibling in graph
-                .instr_dependents(prev)
-                .filter(|id| *id != current)
-                .collect::<Vec<_>>()
-            {
-                if graph.can_fuse_instrs(current, sibling, op_graph) {
-                    let new = graph.fuse_instrs(current, sibling, op_graph);
-                    working_set.remove(&sibling);
-                    working_set.insert(new);
-                    continue 'outer;
-                }
-            }
-        }*/
     }
 }
 
